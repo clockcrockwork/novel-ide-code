@@ -1,0 +1,12 @@
+dist
+.github/actions/**/dist
+dist-ssr
+coverage
+node_modules
+worker
+.claude
+*.md
+*.json
+# agent-commons の projected file（生成物。手編集も自動整形もしない。
+# *.md / .claude は上で除外済みだが、projected な .js はここで明示的に外す）
+scripts/agent/verify-projection.js

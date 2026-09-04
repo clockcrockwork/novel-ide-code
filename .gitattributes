@@ -1,0 +1,3 @@
+# Normalize all text files to LF in the repository.
+# Files are always checked out with LF on any OS, regardless of git.autocrlf.
+* text=auto eol=lf

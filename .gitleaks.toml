@@ -1,0 +1,35 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "プロジェクト固有の除外設定"
+# gitleaks の regex エンジンは RE2（否定先読み (?!...) 非対応）。docs 配下で
+# docs/agent-memory/（検索型永続記憶の正本 JSON。実データを secret-scan の対象にする）
+# だけを除外するため、docs/ を一括許可せず「直下ファイル＋agent-memory 以外のサブ
+# ディレクトリ」を明示列挙する。新設 docs サブディレクトリは既定で走査対象（fail-closed）。
+# 背景: #436 / #466 レビュー（docs/ 一括許可が agent-memory の secret-scan を無効化していた）。
+paths = [
+  # テスト・フィクスチャのダミー値
+  "src/__tests__/",
+  "tests/",
+  "e2e/",
+  # ドキュメント内のサンプル（docs/agent-memory/ を除く）
+  "docs/[^/]+$", # docs 直下のファイル
+  "docs/agent-workflows/",
+  "docs/ai/",
+  "docs/data-model/",
+  "docs/design/",
+  "docs/features/",
+  "docs/maintenance/",
+  "docs/planning/",
+  "docs/pr-analysis/",
+  "docs/pr/",
+  "docs/proofread/",
+  "docs/security/",
+  "docs/workspace/",
+  # ルートの README.md / CLAUDE.md（サンプル値を含む）のみ許可。gitleaks の allowlist paths は
+  # 部分一致（MatchString）のため、アンカーなしだと docs/agent-memory/README.md など入れ子の
+  # README も許可してしまい carve-out が骨抜きになる。^...$ でルート直下に限定する（#480 レビュー）。
+  "^README\\.md$",
+  "^CLAUDE\\.md$",
+]

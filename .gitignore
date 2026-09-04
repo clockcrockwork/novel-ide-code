@@ -1,0 +1,49 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+# Artifacts Gate の bundled local action の生成物は追跡対象（Vite の build 出力 dist とは別物。#428）。
+# source との一致は CI（artifacts-gate-bundle）と npm run check:artifacts-gate-bundle が検証する。
+!/.github/actions/artifacts-gate/dist
+!/.github/actions/artifacts-gate/dist/**
+dist-ssr
+.vite/
+*.local
+
+# Environment variables (never commit secrets)
+# .env* で .env / .env.local / .envrc(direnv) 等を一括除外。example のみ追跡許可
+.env*
+!.env.example
+
+# Test coverage
+coverage/
+
+# Playwright
+test-results/
+playwright-report/
+.playwright-mcp/
+screenshot-*.png
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+
+# サブエージェント用 git worktree（isolation: worktree で生成。作業ツリー内の一時領域）
+.claude/worktrees/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

@@ -1,0 +1,25 @@
+{
+  "name": "novel-ide-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "kv_namespaces": [
+    {
+      // Run: cd worker && npx wrangler kv namespace create SESSIONS
+      // Then replace these placeholder IDs with the output
+      "binding": "SESSIONS",
+      "id": "PLACEHOLDER_REPLACE_WITH_REAL_ID",
+      "preview_id": "PLACEHOLDER_REPLACE_WITH_REAL_PREVIEW_ID"
+    }
+  ],
+  "vars": {
+    // Non-secret: GitHub OAuth App client_id (visible in GitHub settings)
+    // Create at: https://github.com/settings/developers → OAuth Apps → New OAuth App
+    //   Homepage URL: http://localhost:5173
+    //   Authorization callback URL: http://localhost:5173/auth/github/callback
+    "GITHUB_CLIENT_ID": "PLACEHOLDER_REPLACE_WITH_REAL_CLIENT_ID",
+    "ALLOWED_ORIGIN": "http://localhost:5173"
+  }
+  // Secrets (set via CLI, stored in .dev.vars for local dev):
+  //   npx wrangler secret put GITHUB_CLIENT_SECRET
+}

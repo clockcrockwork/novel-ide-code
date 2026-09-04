@@ -1,0 +1,54 @@
+{
+  "lockVersion": 1,
+  "commons": {
+    "repo": "agent-commons",
+    "path": null,
+    "version": "1.0.0",
+    "revision": "d67456f5ac7ead1bbe37c591468dc65f48ca7c80"
+  },
+  "manifest": "agent-manifest.json",
+  "targets": {
+    "claudeAgentsDir": ".claude/agents",
+    "claudeCommandsDir": ".claude/commands",
+    "consumerScriptsDir": "scripts/agent",
+    "reviewAnglesDir": "docs/agent-workflows/review-angles",
+    "workflowsDir": "docs/agent-workflows"
+  },
+  "overlaysDir": "docs/agent-workflows/overlays",
+  "inputs": {
+    "agent-manifest.json": "sha256:2b2d8d295e626d873c2e017d2a9dc0476ff38d2065f7ccf7233783862522c425",
+    "docs/agent-workflows/overlays/angle-adversarial.attack-surface-refs.md": "sha256:440c441898e2dd46761f0f37176180fc57dc45321253a4ebead7de0169f66378",
+    "docs/agent-workflows/overlays/pre-commit-review.project-checks.md": "sha256:e1c733aef5fc286ac777fbb4bc0daa066db73e8db305ff91ece1af568b742b94",
+    "docs/agent-workflows/overlays/review-angles-readme.bench-history.md": "sha256:7a12cbf533875e2fee4d727d7bde4497d1839abeddf10d3d9745ded3cd857932",
+    "docs/agent-workflows/overlays/review-angles-readme.history-notes.md": "sha256:3db03a0c553910fd7c3bec839dbc04f4ebfce872549ebf2b37511234179edc86",
+    "scripts/agent/review-exec-config.js": "sha256:f9320163d442cfbea5482f91cb94c825527ac021d1c2c69fe63a6f93fd5c656a"
+  },
+  "outputs": {
+    ".claude/agents/review-adversarial.md": "sha256:8e7c1ab78f921901839ff3e1a04591aff6bcc44a23ea5f6b0d6a7c79506e1d1c",
+    ".claude/agents/review-cleanup.md": "sha256:3f4d932b090e42c5dc936f38413880a48e19fcf81dc9391516fdef47b4859fc3",
+    ".claude/agents/review-memory.md": "sha256:653ca094dbc9aa196b3df8cc0e96c3a943bb8ce002a546d26a25c975b5e7a2d1",
+    ".claude/agents/review-operability.md": "sha256:901d780223b6633615e6c604e4b2066d9c102941ca6d5f8d37a8bf5ca88f3167",
+    ".claude/agents/review-quality.md": "sha256:8fdc6dde292ca5e11a96cee06b049250515e9d1f5543908969c41e9163639adb",
+    ".claude/agents/review-retrospective.md": "sha256:47674ae5a0e9299583edc0e1b74b16d33b79448fa4c6788abcb81ebfae7eea8d",
+    ".claude/agents/review-riskmodel.md": "sha256:edb4d2cc9e4c4967c6bbab2c682c762f5d4e89c3babb95103715fd66348fc9bc",
+    ".claude/agents/review-spec.md": "sha256:a13b65b5fb80b2218c4ce1f54745721e70093dd8b3d1ea0b83fa6053a77a0a7d",
+    ".claude/agents/review-subtractive.md": "sha256:5e69051ed7d9cefbcab2035d4710714a43e3b06c3d3c9dc0390ec180672af045",
+    ".claude/commands/pre-commit-review.md": "sha256:b6bc23eab23d9b5532021157f59cbefd014bb645b65d756b4d5214a651090ecb",
+    ".claude/commands/review-pr.md": "sha256:15a6f5ca5777863974f8cff2ac64f21b63c7657073f39670b1d7a966e2a73a67",
+    ".claude/commands/review-retrospective.md": "sha256:03eedca80a1c5733edc645c1a6bad4fe5c03a54498d91b1655aed5ebfaee7266",
+    "docs/agent-workflows/pre-commit-review.md": "sha256:8ed412612019fdef5e13be868bbbaac1ada55b63163efe5ae62198ce717b85ef",
+    "docs/agent-workflows/review-angles/README.md": "sha256:8c4934df8b197c075b166958d7fae901f6d24bb6863ccc2a37fa681bb2010098",
+    "docs/agent-workflows/review-angles/angle-adversarial.md": "sha256:f95ced08ec36f264ca0d0b20954b14bd845b70b699a279b4298e8a7982fa0fbc",
+    "docs/agent-workflows/review-angles/angle-cleanup.md": "sha256:f5259be4502014780793b747c3caac0b681132005adc0efd8d7216c72fa1e629",
+    "docs/agent-workflows/review-angles/angle-memory.md": "sha256:5d6683d2293008e9e7a6f16bb03de7636aae2c3ab702c80e92c91aa9831f6a71",
+    "docs/agent-workflows/review-angles/angle-operability.md": "sha256:a927ff068d47a905ce6151781f7ae00e17ac44dba7cacf5e2390c6e8b9bacbda",
+    "docs/agent-workflows/review-angles/angle-quality.md": "sha256:f4ea16abd72c61c08157d706c12e8878e18cc49375f8fab88ce6993f0b06fde4",
+    "docs/agent-workflows/review-angles/angle-riskmodel.md": "sha256:6e88275a8e03b402fc63a892f63ea3e898d57ad83336f4894c047789cfd0fe11",
+    "docs/agent-workflows/review-angles/angle-spec.md": "sha256:ddf5f02ca34ae5fce3f1dde42611bc1d1edc26bb47904759c4e176a15bfae681",
+    "docs/agent-workflows/review-angles/angle-subtractive.md": "sha256:184ab4e9dae6c40452c3e6598b6e275e1b8dde974c8a1aafb16b64b3faf0df4c",
+    "docs/agent-workflows/review-angles/finding-criteria.md": "sha256:b571abfadd199f7d451c3feca4c04fe71b771085dfad08b517f88097e553f784",
+    "docs/agent-workflows/review-pr.md": "sha256:9a7dc1674e43cb40bf0607dae321774b2c495ab2fc92e53db6516ebc41960cab",
+    "docs/agent-workflows/review-retrospective.md": "sha256:80a3d0a58c052d3d417781d820fe19d53ad0aa55d9ce5a8d0d3638a23eacf775",
+    "scripts/agent/verify-projection.js": "sha256:38ca7e6dc8b6344d13027da8821f7b691d897a5372332888354c5ed1a7e1013e"
+  }
+}

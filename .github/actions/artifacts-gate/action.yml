@@ -1,0 +1,44 @@
+name: 'Artifacts Gate'
+description: >-
+  PR 本文の完了主張 artifact（完了条件・想定ケース・既存実装調査・証拠表・レビューループ記録）の
+  機械的下限を検査する。mdast 依存を dist/index.js に束ねた bundled local action として動作し、
+  runtime の setup-node / npm ci を必要としない（#428）。
+
+# 入力契約（#428 で明文化）:
+# - changed-files: base...HEAD の変更ファイル一覧（改行区切り。空白はファイル名の一部として扱う。0件なら空文字列）。
+#     呼び出し側 Workflow が必ず明示的に渡す（required）。JS action の INPUT_ 環境変数は
+#     default 未設定でも「未指定」時に空文字列で設定され「明示的に空」と区別できないため
+#     （actions/runner#924 で現行仕様として確認済み）、required にして「未指定」ケースを
+#     構造的に排除する。git 差分への自動フォールバックは scripts/agent/check-artifacts.js の
+#     CLI 単体利用（本 action を経由しない直接実行）向けの機能として維持し、本 action では使わない。
+# - pr-body: 検査対象の PR 本文。pull_request.edited を含めて最新本文を渡すこと（空文字列も可）。
+# - pr-number / head-sha: 証明行（proof line）に埋め込む PR 番号・head SHA。GitHub の check-run
+#     はテストマージコミットに紐づき head SHA と一致しない場合があるため、run 出力自体に
+#     この2値と本文ハッシュ・判定結果・run ID を埋め込み、ci-run.md の merge 前必須確認は
+#     それと突き合わせる。run ID（GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT）はこの action の入力
+#     ではなく GitHub Actions が全 job に自動設定する環境変数から取得する（src/index.js 参照）。
+#     この action を実行する環境にこれらの環境変数が無い場合、証明行を出せないまま gate を
+#     通過させないよう fail-loud する（同ファイル参照）。
+inputs:
+  changed-files:
+    description: 'base...HEAD の変更ファイル一覧（改行区切り。空白はファイル名の一部として扱う。0件なら空文字列）。CHANGED_FILES へ渡す。'
+    required: true
+  pr-body:
+    description: '検査対象の PR 本文（pull_request.body）。PR_BODY へ渡す。'
+    required: false
+    default: ''
+  pr-number:
+    description: '検査対象の PR 番号（github.event.pull_request.number）。証明行に埋め込む。'
+    required: true
+  head-sha:
+    description: '検査対象の head SHA（github.event.pull_request.head.sha）。証明行に埋め込む。'
+    required: true
+
+# ネイティブ JavaScript action として実行する。runner が main を直接 node 実行するため
+# setup-node / npm ci 不要、かつ composite + shell:bash で必要だった OS 依存のパス処理
+# （Windows のバックスラッシュ置換）も不要になる（#428 レビュー対応）。依存は dist/index.js に束済み。
+# inputs は GitHub が INPUT_CHANGED-FILES / INPUT_PR-BODY 環境変数として渡し、src/index.js が
+# CHANGED_FILES / PR_BODY にマッピングする（PR 本文はシェルへ展開しないため script injection 安全）。
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

@@ -1,0 +1,275 @@
+name: CI
+
+# CI 消費 minutes の削減方針（#358）:
+# - **PR ブランチへの push では起動しない**。観点レビューループ中の中間 HEAD を毎回検証すると
+#   同じ CI が何度も走るため、レビュー収束後に workflow_dispatch で明示的に起動する（#551）。
+#   運用手順・状態遷移の正本: docs/ai/rules/ci-run.md
+# - concurrency で同一ブランチの古い run を自動キャンセルする
+# - changes ジョブ（軽量）で変更を分類し、docs のみの変更では lint-test / semgrep を、
+#   依存 manifest 変更がないときは audit を、bundle 関連パスが無傷なら bundle-check をスキップする
+# - secret-scan は変更種別によらず常時実行する（docs にも secret は混入しうる）
+# - 全ジョブに timeout-minutes を設定する
+# - step-level parallel（2026-06 追加）は未検証のため導入しない（検証は #358 / #429）
+# 補足: required check の設計は集約ジョブ required-gate を使う（#430）。個別ジョブの required 化は
+# 「必要なジョブが意図せず skip されても green」を検出できないため、required-gate が変更分類と
+# needs.*.result を突き合わせて一箇所で判定する。この判定結果は check run としては現在も生成される。
+# ただし novel-ide は現状 GitHub Free の private repository であり、GitHub の protected branches
+# （required status checks を含む）は Free プランでは public repository のみが対象で、private
+# repository には利用できない（設定して効かないのではなく、そもそも強制可能な設定を持てない）。
+# そのため「CI 未実行の commit は branch protection が止める」は現状では成立しない — private 期間の
+# 安全性はエージェントの merge 前必須確認（プロセスゲート）が担う。required check が技術ゲートとして
+# 機能するのは public/private 分離後の public code repository から。
+# 詳細・二段階の整理: docs/ai/rules/ci-run.md、docs/planning/ci-split-design.md §11.7
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# public repo 化に備えデフォルトを read-only にする（issue #225）。
+# 追加権限が必要な job のみ job 単位で明示的に昇格する。
+permissions:
+  contents: read
+
+# ref ではなく ref_name を使う。workflow_dispatch の github.ref は refs/heads/<branch> で、
+# 同一ブランチに対する複数回の起動を同じグループへ寄せるため（旧 head_ref との不一致を避ける）。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+# 値の正本はここ（workflow ごとに1箇所）。job/step env で上書きしない（検証 step の最終防御として
+# 各 job の `${NPM_PIN:?…}` を残す）。背景・更新手順・制約は docs/SUPPLY_CHAIN.md。
+env:
+  NPM_PIN: "11.19.0"
+
+jobs:
+  # 変更ファイルを分類し、重いジョブのスキップ判定を出力する（実測 ~15 秒）。
+  # 分類基準は scripts/agent/classify-changes.js に単一ソース化（check-artifacts.js が import して
+  # artifacts-gate と共通）。このジョブは npm ci を行わないため、分類スクリプトは依存フリーであること。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+      deps: ${{ steps.classify.outputs.deps }}
+      docs: ${{ steps.classify.outputs.docs }}
+      bundle: ${{ steps.classify.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          fetch-depth: 0
+      - name: Classify changed files
+        id: classify
+        env:
+          BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          # -c core.quotepath=off -c diff.renames=false: 分類器入力を作る git diff 呼び出しの
+          # 4経路（本 job／artifacts-gate.yml／check-artifacts.js の gitChangedFiles／
+          # review-snapshot.js）のうち、名前一覧の生成に使う3経路は同じ設定にする。
+          # フラグの理由・残余（C-quote される制御文字等のケース）は
+          # docs/planning/ci-split-design.md §1.1 を正本とする（本文を複製しない。#446 round6）。
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]; then
+            # PR ブランチの手動起動。PR イベント context が無いため base は default branch とみなす。
+            # 別ブランチを base にした PR では差分が広くなる（＝より多くのジョブが走る）だけで fail-closed 側に倒れる。
+            # 明示 refspec・full depth で取得する。--depth=1 だと fetch した tip が shallow root になり、
+            # 三点差分に必要な merge-base を解決できずジョブごと落ちうる（checkout は fetch-depth: 0）。
+            git fetch --no-tags origin "+refs/heads/$DEFAULT_BRANCH:refs/remotes/origin/$DEFAULT_BRANCH"
+            FILES=$(git -c core.quotepath=off -c diff.renames=false diff --name-only "origin/$DEFAULT_BRANCH...HEAD")
+          elif [ "${{ github.event_name }}" = "push" ] && [ -n "$BEFORE" ] && git cat-file -e "$BEFORE" 2>/dev/null; then
+            FILES=$(git -c core.quotepath=off -c diff.renames=false diff --name-only "$BEFORE" "$GITHUB_SHA")
+          else
+            # default branch の手動起動 / force push 等、差分を特定できない場合は FILES を空にし、
+            # classify-changes.js の空入力 fail-closed（全 true）へ委譲する（#446 round2 観点別
+            # レビュー 減算: 「差分不明時は全ジョブ実行」ロジックをここに複製しない）。
+            FILES=""
+          fi
+          CHANGED_FILES="$FILES" node scripts/agent/classify-changes.js >> "$GITHUB_OUTPUT"
+
+      # npm を install する全 job は既に registry.npmjs.org 依存で、値は静的リテラル1つのため
+      # root で1回検証する。スクリプトは node ビルトインのみで npm ci 不要（このジョブの依存フリー方針を維持）。
+      # 分類結果が全 false（npm を install する job が1つも走らない差分）なら registry fetch 自体を skip する。
+      - name: NPM_PIN の cooldown 検証
+        if: steps.classify.outputs.code == 'true' || steps.classify.outputs.deps == 'true' || steps.classify.outputs.docs == 'true' || steps.classify.outputs.bundle == 'true'
+        run: node scripts/agent/check-npm-pin-cooldown.js
+
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run check:thresholds
+      - run: npm run test
+
+  # worker（Cloudflare Worker）のテスト。root の vitest は vite.config.js の
+  # test.exclude で worker/** を除外しているため、このジョブが無いと
+  # worker/src/__tests__/ は CI のどのジョブでも実行されない（#506 の穴の一部）。
+  # sync の同期エラー意味論・init 安全化のガードは worker 側の route 配線に載っており、
+  # 走らないテストはゲートとして機能しない（#608）。
+  worker-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - run: npm ci
+        working-directory: worker
+      - run: npm run typecheck
+        working-directory: worker
+      - run: npm run test
+        working-directory: worker
+
+  # docs 相対リンク切れ・アンカー不整合の機械ゲート（#426）。
+  # scripts/check-doc-links.js はリポジトリ内相対リンクのみを検査する（外部 http は対象外）。
+  # 変更ファイルの有無にかかわらず全 .md を走査するため、docs 変更時のみ起動する。
+  # agent-commons のプロジェクション drift 検査もここで行う（*.md のみの変更は
+  # classify-changes.js 上 code=false となり lint-test / semgrep が skip されるため、
+  # docs=true で走る本 job が唯一の CI 検査経路になる。verify-projection.js は node
+  # ビルトインのみに依存し、canonical source（agent-commons リポジトリ）への network / token
+  # アクセスを一切行わない — consumer 側の lock（agent-commons.lock.json）だけで検証する。
+  # 本 job は既に npm ci 済みなのでそのまま呼ぶ）。
+  docs-links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - run: npm ci
+      - run: npm run docs:links:check
+      - run: node scripts/agent/verify-projection.js
+      - run: node --test tests/agentCommons.test.js
+
+  # Artifacts Gate の bundled local action（.github/actions/artifacts-gate/dist/index.js）が source と
+  # 一致しているかを検証する（#428）。dist は ncc 生成物のため、source（check-artifacts.js /
+  # mdast-body.js / classify-changes.js / review-angle-tokens.js / action の src）や ncc / 依存を
+  # 更新して再ビルドを忘れると、実際に動くのは古い bundle になる。再ビルドして git diff が出たら fail-loud。
+  # 独立 workflow（artifacts-gate-bundle.yml）から本 job へ統合した（#551）。理由:
+  # push 連動の paths トリガーだったためレビューループ中に npm ci + ncc を毎 push 実行していたこと、
+  # および独立 workflow のままでは required check に含まれず drift がマージをブロックしなかったこと。
+  bundle-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.bundle == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - run: npm ci
+      # 検証ロジックは npm run check:artifacts-gate-bundle（scripts/check-artifacts-gate-bundle.js）
+      # と共有する（CI とローカルで drift 判定基準を単一ソース化）。
+      - name: Rebuild bundle and verify it matches source
+        run: npm run check:artifacts-gate-bundle
+
+  # npm ci ×2 + audit ×4 で最も minutes を消費するため、依存 manifest 変更時のみ実行する（#358）
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - run: npm ci
+      # production deps の High/Critical はブロック扱い（issue #225）
+      - run: npm audit --audit-level=high --omit=dev
+      - name: Worker audit (production)
+        working-directory: worker
+        run: npm ci && npm audit --audit-level=high --omit=dev
+      # devDependencies 込みの CI サプライチェーンリスク可視化。
+      # 初期は continue-on-error で可視化のみ。運用安定後にブロック化を検討（issue #225）。
+      - name: Audit all deps (CI supply-chain risk, visibility only)
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - name: Worker audit all deps (CI supply-chain risk, visibility only)
+        working-directory: worker
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    # continue-on-error を削除: semgrep 検知を merge ブロッカーにする（issue #145 補強）
+    container:
+      image: semgrep/semgrep:1.175.0@sha256:b94b53d02fd4a022f9eac4e2af1380f5c3c4c21400e79d3336bdff1d1db5e796 # 更新は tag と digest を同時に差し替え。
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      # semgrep/semgrep コンテナには node_modules が無く npm ci を実行しないため、
+      # npm run security:semgrep を呼べず引数をここに複製している。引数を変えるときは package.json の security:semgrep も同時に更新する。
+      - run: semgrep scan --config p/javascript --config p/react --config p/owasp-top-ten --error
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # continue-on-error を削除: シークレット混入を merge ブロッカーにする（issue #145 補強）
+    # トップレベルは contents: read。gitleaks-action は PR への注釈付与のため
+    # pull-requests: read を要するため job 単位で明示維持する（issue #225）。
+    # 注: #551 で本 workflow は pull_request で起動しなくなったため、この注釈経路は現状到達しない。
+    # read 権限のみで実害が無く、gitleaks-action の PR 対応を将来また使う可能性があるため残す。
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0（node24対応）。third-party のため SHA pin 必須。更新は Dependabot/手動で SHA を差し替え。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 集約 required check（#430）。変更分類に対して「必要なジョブが success」「不要なジョブは意図した skip」を
+  # 一箇所で判定する。branch protection はこのジョブのみを required にする（required matrix の文書正本:
+  # docs/planning/ci-split-design.md §5）。
+  # ジョブを追加・rename した場合は、この needs と scripts/agent/check-required-gate.js の RULES を両方更新すること。
+  # 判定スクリプトは npm ci なしで直接実行するため依存フリーであること（changes ジョブと同方針）。
+  required-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # 上流ジョブが skip / fail しても必ず評価する。デフォルト（success()）だと上流 skip 時に
+    # このジョブ自体が skip され、branch protection が skipped required を成功扱いにする穴が戻る。
+    if: always()
+    needs:
+      - changes
+      - lint-test
+      - worker-test
+      - docs-links
+      - bundle-check
+      - audit
+      - semgrep
+      - secret-scan
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+      - name: Validate required job results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node scripts/agent/check-required-gate.js

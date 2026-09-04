@@ -1,0 +1,55 @@
+name: Artifacts Gate
+
+# 完了主張 artifact（完了条件・想定ケース・既存実装調査・証拠表）の機械的下限ゲート（#387）。
+# PR 本文の artifact が「未作成のままチェック済み」で通るのを塞ぐ。
+# 存在・形式のみ検証し、証拠の真偽は evidence-check（cross-model）に残す。
+# 本文の後追い記入・改変に追従するため edited を含める（重い CI と分離してコストを抑える）。
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifacts-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      # fetch-depth: 0 は Compute changed files の `origin/$BASE...HEAD` 差分に必要（merge-base
+      # を辿るため）。ローカル action の実行自体には不要だが、変更ファイル計算のため 0 を維持する（#428）。
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0（node24対応）。更新は Dependabot/手動で SHA を差し替え。
+        with:
+          fetch-depth: 0
+      # mdast 依存は .github/actions/artifacts-gate/dist/index.js に束ねてあるため（#428）、
+      # setup-node / npm install -g npm@11 / npm ci は不要。runner 同梱の Node で bundled action を実行する。
+      - name: Compute changed files
+        # $GITHUB_ENV への multiline 書き込みは静的デリミタ（例: EOF 単独行）だと、
+        # 変更ファイル名に "EOF" という行そのものが含まれる場合にヒアドキュメントが早期終端し
+        # CHANGED_FILES が欠落した値になる（GitHub Actions の既知パターン。レビュー指摘・
+        # コードリーディングで確認: 欠落した changedFiles だと classify() の codeChanged が
+        # false になり得、本来必須の artifact 検査が丸ごとスキップされる恐れがある）。
+        # 実行ごとに一意なデリミタ（run_id + 乱数）を使い、ファイル名との衝突を実質排除する。
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE" || true
+          DELIM="ghadelim_${GITHUB_RUN_ID}_${RANDOM}_${RANDOM}"
+          echo "CHANGED_FILES<<$DELIM" >> "$GITHUB_ENV"
+          # -c core.quotepath=off -c diff.renames=false: ci.yml の changes ジョブと同じ理由。
+          # フラグの理由・残余は docs/planning/ci-split-design.md §1.1 を正本とする
+          # （本文を複製しない。#446 round6）。
+          git -c core.quotepath=off -c diff.renames=false diff --name-only "origin/$BASE...HEAD" >> "$GITHUB_ENV"
+          echo "$DELIM" >> "$GITHUB_ENV"
+        env:
+          BASE: ${{ github.base_ref }}
+      - name: Check completion artifacts in PR body
+        uses: ./.github/actions/artifacts-gate
+        with:
+          changed-files: ${{ env.CHANGED_FILES }}
+          pr-body: ${{ github.event.pull_request.body }}
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}

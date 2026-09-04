@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "scripts/**/*.js",
+    "bench/**/*.{js,jsx}",
+    "tests/**/*.test.js",
+    "e2e/**/*.{js,ts}",
+    ".github/actions/*/src/**/*.js"
+  ],
+  "project": [
+    "src/**/*.{js,jsx}",
+    "scripts/**/*.js",
+    "bench/**/*.{js,jsx}",
+    "tests/**/*.test.js",
+    "e2e/**/*.{js,ts}",
+    ".github/actions/*/src/**/*.js"
+  ],
+  "ignore": ["worker/**"],
+  "ignoreBinaries": ["semgrep", "gitleaks"],
+  "includeEntryExports": true
+}

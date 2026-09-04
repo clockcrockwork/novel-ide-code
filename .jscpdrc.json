@@ -1,0 +1,10 @@
+{
+  "path": ["src", "scripts"],
+  "format": ["javascript", "jsx"],
+  "ignore": ["**/*.test.js", "**/*.test.jsx", "src/__tests__/**"],
+  "reporters": ["console"],
+  "gitignore": true,
+  "minTokens": 50,
+  "minLines": 5,
+  "absolute": true
+}
