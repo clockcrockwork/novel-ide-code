@@ -174,9 +174,10 @@ test('.jscpdrc.json の path / knip.json の project が verification-gates.md �
   }
 });
 
-// #551 の「PR push では CI を起動しない」方針と、public repo の required status checks は
-// 構造的に両立しない（required は head SHA 単位で評価され、workflow_dispatch 由来の check run は
-// required 欄を満たさない — public repo で実測）。ci.yml から pull_request トリガーが落ちると
+// #551 の「PR push では CI を起動しない」方針と、public repo の required status checks は、
+// 本 repository で観測した挙動のもとでは両立しない（同一 head SHA でも workflow_dispatch 起動では
+// required 欄が Expected のまま解けず、pull_request 起動では満たされた — public repo で実測。
+// 正本: docs/ai/rules/ci-run.md「PR 起動の適用範囲」）。ci.yml から pull_request トリガーが落ちると
 // public 側の required-gate が恒久的に Expected のまま詰まるため、トリガーとガードの両方を固定する。
 test('ci.yml: pull_request トリガーと visibility ガードが揃っている（required-gate が PR の required 欄を満たす前提）', () => {
   const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf-8');
@@ -185,7 +186,7 @@ test('ci.yml: pull_request トリガーと visibility ガードが揃ってい�
     onBlock,
     /^\s{2}pull_request:\s*$/m,
     'ci.yml の on: に pull_request トリガーが無い。required status checks は head SHA 単位で評価され、' +
-      'workflow_dispatch 由来の check run では public repo の required 欄を満たせない',
+      'workflow_dispatch 起動では public repo の required 欄が満たされなかった（本 repository での実測）',
   );
   assert.doesNotMatch(
     onBlock,

@@ -23,12 +23,14 @@ name: CI
 on:
   push:
     branches: [main]
-  # public repository でのみ実効。required status checks は head SHA 単位で評価され、GitHub は
-  # PR に紐づくイベント由来の check run しか required 欄の充足として扱わない — workflow_dispatch で
-  # 起動した run の check run は head SHA 上に success で存在しても required 欄は
-  # 「Expected — Waiting for status to be reported」のままになる（実測）。したがって
-  # 「required-gate を required にする」ことと「PR では CI を起動しない」（#551）は両立しない。
-  # 起動可否は下の visibility ガードで分ける（private では #551 の方針を完全に維持する）。
+  # public repository でのみ実効。本 repository の public 側で観測した事実として、同一 head SHA に対し
+  # workflow_dispatch 起動の run では required-gate の check run が success でも required 欄が
+  # 「Expected — Waiting for status to be reported」のまま解けず、pull_request 起動では満たされた。
+  # required status checks が head SHA 単位で評価される点は GitHub の仕様だが、どの起動イベントの
+  # check run が充足として扱われるかは公式ドキュメントで確認できていない（本 repository での実測）。
+  # いずれにせよ「required-gate を required にする」ことと「PR では CI を起動しない」（#551）は
+  # 現状の観測では両立しないため、起動可否を下の visibility ガードで分ける
+  # （private では #551 の方針を完全に維持する）。
   pull_request:
   workflow_dispatch:
 

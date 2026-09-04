@@ -27,12 +27,22 @@ GitHub Actions の重い CI（`.github/workflows/ci.yml`）の起動単位は **
 
 ## PR 起動の適用範囲（なぜ visibility で分けるか）
 
-**#551 の「PR push では CI を起動しない」と、public repo で `required-gate` を required にすることは
-構造的に両立しない。** required status checks は **head SHA 単位**で評価され、GitHub は
-**PR に紐づくイベント由来の check run しか required 欄の充足として扱わない**。
-`workflow_dispatch` で起動した run の check run は、対象 head SHA 上に `success` として実在していても
-required 欄は `Expected — Waiting for status to be reported` のままになり、PR は
-`mergeable_state=blocked` から動かない（public repo で実測）。
+**#551 の「PR push では CI を起動しない」と、public repo で `required-gate` を required にすることは、
+本 repository で観測した挙動のもとでは両立しない。**
+
+観測した事実（`novel-ide-code#6` での実測。同一 PR・連続する2つの head SHA での対照）:
+
+| head SHA | CI の起動イベント | `required-gate` の check run | PR の required 欄 | `mergeable_state` |
+|---|---|---|---|---|
+| `f8e11e8` | `workflow_dispatch` | `conclusion: success`（head SHA 上に実在） | `Expected — Waiting for status to be reported` | `blocked` |
+| `76a4385` | `pull_request` | `conclusion: success` | 満たされた | `clean` |
+
+check run の内容はどちらも success で、**変わったのは起動イベントだけ**である。
+
+> **一般則としては書かない**: required status checks が head SHA 単位で評価されることは GitHub の
+> 仕様だが、「どの起動イベント由来の check run が充足として扱われるか」は公式ドキュメントで
+> 確認できていない。本節は **本 repository の設定（ruleset・GitHub Actions）における実測**として
+> 扱い、他環境へ一般化しない。将来 GitHub 側の挙動やドキュメントが変わりうる前提で読むこと。
 
 分けられる理由は、2 つの制約が **visibility に対して排他**だからである。
 
@@ -410,7 +420,7 @@ public code repository では branch protection（または ruleset）で以下�
    扱いは下記「緊急バイパス方針」を参照）。
 2. **Require status checks to pass before merging** を有効化し、required に次の 2 つだけを登録する。
    **前提として `ci.yml` が `pull_request` で起動すること**（`workflow_dispatch` の check run では
-   required 欄を満たせない。理由と実測は上記「PR 起動の適用範囲」）。
+   required 欄を満たせなかった〔本 repository での実測〕。詳細は上記「PR 起動の適用範囲」）。
    個別 job（`lint-test` 等）は required にしない — `if` でスキップされた job の check run は
    conclusion `skipped` として作られ、branch protection がそれを成功扱いにするため
    （集約 `required-gate` に判定を一本化する理由。#430）。
