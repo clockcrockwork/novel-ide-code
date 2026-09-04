@@ -1,7 +1,15 @@
 # CI の起動単位とマージまでの手順
 
-GitHub Actions の重い CI（`.github/workflows/ci.yml`）は **PR ブランチへの push では起動しない**。
-観点レビューループが収束したあとに、**明示的な操作で最新 HEAD に対して 1 回だけ**起動する（#551）。
+GitHub Actions の重い CI（`.github/workflows/ci.yml`）の起動単位は **repository の visibility で分かれる**。
+
+| repository | PR での起動 | 根拠 |
+|---|---|---|
+| **private**（control repo。現行 novel-ide） | **起動しない**。観点レビューループが収束したあとに、明示的な操作で最新 HEAD に対して 1 回だけ起動する（#551） | required status checks を利用できず技術ゲートが存在しない。Actions minutes は Free 枠を消費する |
+| **public**（public code repository） | **`pull_request` イベントで起動する**（open / synchronize / reopen） | required status checks が技術ゲートとして効く。標準ランナーの Actions 利用は public repository では無料・無制限で minutes 枠を消費しない |
+
+この分岐は `ci.yml` の `changes` / `secret-scan` / `required-gate` の 3 job に置いた
+`github.event_name != 'pull_request' || github.event.repository.visibility == 'public'` が実装する。
+詳細は下記「PR 起動の適用範囲」。
 
 > **重要**: novel-ide は現在 GitHub Free の private repository である。GitHub の protected branches
 > （required status checks を含む）は、Free プランでは **public repository が対象**であり、
@@ -17,12 +25,59 @@ GitHub Actions の重い CI（`.github/workflows/ci.yml`）は **PR ブランチ
 
 ---
 
+## PR 起動の適用範囲（なぜ visibility で分けるか）
+
+**#551 の「PR push では CI を起動しない」と、public repo で `required-gate` を required にすることは
+構造的に両立しない。** required status checks は **head SHA 単位**で評価され、GitHub は
+**PR に紐づくイベント由来の check run しか required 欄の充足として扱わない**。
+`workflow_dispatch` で起動した run の check run は、対象 head SHA 上に `success` として実在していても
+required 欄は `Expected — Waiting for status to be reported` のままになり、PR は
+`mergeable_state=blocked` から動かない（public repo で実測）。
+
+分けられる理由は、2 つの制約が **visibility に対して排他**だからである。
+
+- **minutes 削減が要るのは private だけ**: 標準ランナーの Actions 利用は public repository では
+  無料・無制限で、Free 枠を消費しない。public 側で PR ごとに CI を回しても枠を圧迫しない。
+- **技術ゲートが要る（かつ持てる）のは public だけ**: private（Free）では required status checks を
+  そもそも利用できない。
+
+したがって private では #551 の方針を**完全に維持**し、public でのみ `pull_request` 起動を有効にする。
+
+### 実装上の制約
+
+- **`on.pull_request` に `paths` / `paths-ignore` を付けない**。対象外の変更では workflow 自体が
+  起動せず、`required-gate` が報告されないまま `Expected` で PR が詰む。絞り込みは従来どおり
+  `changes` job の分類 → 各 job の `if` で行う（起動はするが中身を skip する形にする）。
+- **ガードは `changes` / `secret-scan` / `required-gate` の 3 job に置く**。他 job は
+  `needs: changes` の cascade で skip されるため不要。`required-gate` は `always()` との AND を保つ
+  （`always()` を落とすと上流 skip 時に job ごと skip され、branch protection が skipped required を
+  成功扱いにする穴が戻る。#430）。
+- **`changes` job は `pull_request` イベント用の差分経路を持つ**。持たないと差分不明として
+  fail-closed（全分類 true）に落ち、public の PR で常に全 job が走って分類による削減が消える。
+  base/head は PR context（`pull_request.base.sha` / `pull_request.head.sha`）から取る
+  （checkout は merge ref のため `GITHUB_SHA` は merge commit を指し、base 側の変更まで拾ってしまう）。
+- 上記 3 点は `tests/gateScopeDrift.test.js` が機械検査する（トリガー欠落・`paths` 追加・
+  ガード欠落・`always()` 欠落をそれぞれ検出する）。
+
+### public 側で残る削減
+
+`pull_request` 起動でも次の 2 つはそのまま効く。
+
+- **変更分類**（`changes` job）: docs のみの PR では `lint-test` / `worker-test` / `semgrep` /
+  `audit` / `bundle-check` が skip される。
+- **`concurrency` の `cancel-in-progress`**: 同一 PR への連続 push では古い run が自動キャンセルされる。
+
+失われるのは「レビューループ中の中間 HEAD では一切走らせない」という部分だけで、これは
+required status checks が head SHA 単位で評価される以上、技術ゲートを持つ限り避けられない。
+
+---
+
 ## 3 層の検証責務
 
 | 層 | 実行者 | 何を | いつ |
 |---|---|---|---|
 | ローカル検証 | 実装／レビューエージェント・人間 | [verification-gates.md](verification-gates.md) の該当行（`npm run check` / `docs:links:check` / `check:artifacts` 等） | **修正ごと**（毎 commit の前） |
-| 最終 CI | GitHub Actions `ci.yml` | lint・test・docs-links・bundle-check・audit・semgrep・secret-scan | **レビュー収束後に手動起動**（1 PR につき原則 1 回、修正が入れば都度） |
+| 最終 CI | GitHub Actions `ci.yml` | lint・test・docs-links・bundle-check・audit・semgrep・secret-scan | **private**: レビュー収束後に手動起動（1 PR につき原則 1 回、修正が入れば都度）／**public**: `pull_request` イベントで自動（上記「PR 起動の適用範囲」） |
 | バックストップ | GitHub Actions `ci.yml`（`push: main`） | 同上（main の実 HEAD に対して） | main への merge 後（自動） |
 
 `artifacts-gate`（PR 本文の完了主張 artifact 検査）だけは例外で、軽量なため PR イベント
@@ -30,7 +85,10 @@ GitHub Actions の重い CI（`.github/workflows/ci.yml`）は **PR ブランチ
 
 ---
 
-## 通常フロー
+## 通常フロー（private repository）
+
+> public code repository では `pull_request` 起動のため下図と異なる（push ごとに CI が自動で走り、
+> `required-gate` が PR の required 欄を満たす）。適用範囲は上記「PR 起動の適用範囲」を参照。
 
 ```text
 実装・修正 → commit・push（CI は起動しない）
@@ -351,6 +409,8 @@ public code repository では branch protection（または ruleset）で以下�
 1. **Require a pull request before merging** を有効化（main への直接 push を禁止。緊急バイパスの
    扱いは下記「緊急バイパス方針」を参照）。
 2. **Require status checks to pass before merging** を有効化し、required に次の 2 つだけを登録する。
+   **前提として `ci.yml` が `pull_request` で起動すること**（`workflow_dispatch` の check run では
+   required 欄を満たせない。理由と実測は上記「PR 起動の適用範囲」）。
    個別 job（`lint-test` 等）は required にしない — `if` でスキップされた job の check run は
    conclusion `skipped` として作られ、branch protection がそれを成功扱いにするため
    （集約 `required-gate` に判定を一本化する理由。#430）。
@@ -362,7 +422,8 @@ public code repository では branch protection（または ruleset）で以下�
    別途判断する（有効化すると main が進むたび全 PR で再実行が必要になり、枠保護の目的と衝突しうる。
    分離後の実際の PR 頻度・枠状況を見てから決める）。
 5. **CI 成功後の新しい push では再検証を必須とする**（required status checks が SHA 単位で評価
-   されることにより自然に満たされる。private 期間のような運用確認は不要になる）。
+   されることにより自然に満たされる。private 期間のような運用確認は不要になる）。`pull_request` の
+   `synchronize` で新しい head SHA に対して CI が自動起動するため、手動起動の運用は public では不要。
 
 これらは GUI / API 操作でありコードでは完結しない。リポジトリ分離作業の一部として実施する。
 

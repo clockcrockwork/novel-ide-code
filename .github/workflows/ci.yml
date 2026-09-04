@@ -23,6 +23,13 @@ name: CI
 on:
   push:
     branches: [main]
+  # public repository でのみ実効。required status checks は head SHA 単位で評価され、GitHub は
+  # PR に紐づくイベント由来の check run しか required 欄の充足として扱わない — workflow_dispatch で
+  # 起動した run の check run は head SHA 上に success で存在しても required 欄は
+  # 「Expected — Waiting for status to be reported」のままになる（実測）。したがって
+  # 「required-gate を required にする」ことと「PR では CI を起動しない」（#551）は両立しない。
+  # 起動可否は下の visibility ガードで分ける（private では #551 の方針を完全に維持する）。
+  pull_request:
   workflow_dispatch:
 
 # public repo 化に備えデフォルトを read-only にする（issue #225）。
@@ -48,6 +55,14 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # PR 起動は public repository に限る（正本: docs/ai/rules/ci-run.md「PR 起動の適用範囲」）。
+    # public は required status checks が技術ゲートとして効き、かつ標準ランナーの Actions 利用が
+    # 無料・無制限で minutes 枠を消費しない。private（control repo）は逆にどちらも成り立たないため
+    # #551 の「PR push では起動しない」を維持する。repository 名ではなく visibility で判定する
+    # （名前の直書きを避け、条件の意味そのものを式にする）。
+    # 本 job と secret-scan・required-gate の3つに同じガードを置く。他 job は needs: changes の
+    # cascade で skip されるため不要（changes が skip なら outputs は空で各 if が false になる）。
+    if: github.event_name != 'pull_request' || github.event.repository.visibility == 'public'
     outputs:
       code: ${{ steps.classify.outputs.code }}
       deps: ${{ steps.classify.outputs.deps }}
@@ -62,13 +77,20 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           # -c core.quotepath=off -c diff.renames=false: 分類器入力を作る git diff 呼び出しの
           # 4経路（本 job／artifacts-gate.yml／check-artifacts.js の gitChangedFiles／
           # review-snapshot.js）のうち、名前一覧の生成に使う3経路は同じ設定にする。
           # フラグの理由・残余（C-quote される制御文字等のケース）は
           # docs/planning/ci-split-design.md §1.1 を正本とする（本文を複製しない。#446 round6）。
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # PR イベント。base/head は PR context から取る（checkout は merge ref のため
+            # HEAD は merge commit であり、GITHUB_SHA を直接使うと base の変更まで拾ってしまう）。
+            # fetch-depth: 0 なので base_sha・head_sha とも取得済み。三点差分で PR 自身の変更のみを見る。
+            FILES=$(git -c core.quotepath=off -c diff.renames=false diff --name-only "$PR_BASE_SHA...$PR_HEAD_SHA")
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$GITHUB_REF_NAME" != "$DEFAULT_BRANCH" ]; then
             # PR ブランチの手動起動。PR イベント context が無いため base は default branch とみなす。
             # 別ブランチを base にした PR では差分が広くなる（＝より多くのジョブが走る）だけで fail-closed 側に倒れる。
             # 明示 refspec・full depth で取得する。--depth=1 だと fetch した tip が shallow root になり、
@@ -234,8 +256,9 @@ jobs:
     # continue-on-error を削除: シークレット混入を merge ブロッカーにする（issue #145 補強）
     # トップレベルは contents: read。gitleaks-action は PR への注釈付与のため
     # pull-requests: read を要するため job 単位で明示維持する（issue #225）。
-    # 注: #551 で本 workflow は pull_request で起動しなくなったため、この注釈経路は現状到達しない。
-    # read 権限のみで実害が無く、gitleaks-action の PR 対応を将来また使う可能性があるため残す。
+    # public repository の PR 起動では pull_request context があるため、この注釈経路に到達しうる。
+    # private では PR 起動しない（下記ガード）ため到達しない。read 権限のみで実害はない。
+    if: github.event_name != 'pull_request' || github.event.repository.visibility == 'public'
     permissions:
       contents: read
       pull-requests: read
@@ -257,7 +280,9 @@ jobs:
     timeout-minutes: 5
     # 上流ジョブが skip / fail しても必ず評価する。デフォルト（success()）だと上流 skip 時に
     # このジョブ自体が skip され、branch protection が skipped required を成功扱いにする穴が戻る。
-    if: always()
+    # visibility ガードを always() と AND で併記する（private の PR ではこの job 自体を走らせない。
+    # 走らせると上流が全 skip のため必ず failure になり、private PR に恒常的な赤が付く）。
+    if: always() && (github.event_name != 'pull_request' || github.event.repository.visibility == 'public')
     needs:
       - changes
       - lint-test
