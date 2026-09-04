@@ -173,3 +173,52 @@ test('.jscpdrc.json の path / knip.json の project が verification-gates.md �
     );
   }
 });
+
+// #551 の「PR push では CI を起動しない」方針と、public repo の required status checks は、
+// 本 repository で観測した挙動のもとでは両立しない（同一 head SHA でも workflow_dispatch 起動では
+// required 欄が Expected のまま解けず、pull_request 起動では満たされた — public repo で実測。
+// 正本: docs/ai/rules/ci-run.md「PR 起動の適用範囲」）。ci.yml から pull_request トリガーが落ちると
+// public 側の required-gate が恒久的に Expected のまま詰まるため、トリガーとガードの両方を固定する。
+test('ci.yml: pull_request トリガーと visibility ガードが揃っている（required-gate が PR の required 欄を満たす前提）', () => {
+  const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf-8');
+  const onBlock = ci.slice(ci.indexOf('\non:'), ci.indexOf('\npermissions:'));
+  assert.match(
+    onBlock,
+    /^\s{2}pull_request:\s*$/m,
+    'ci.yml の on: に pull_request トリガーが無い。required status checks は head SHA 単位で評価され、' +
+      'workflow_dispatch 起動では public repo の required 欄が満たされなかった（本 repository での実測）',
+  );
+  assert.doesNotMatch(
+    onBlock,
+    /^\s{4}paths(-ignore)?:/m,
+    'on.pull_request に paths フィルタを付けてはいけない。対象外の変更では workflow 自体が起動せず、' +
+      'required-gate が報告されないまま Expected で詰まる（job 側の changes 分類で絞ること）',
+  );
+
+  // ガードは changes / secret-scan / required-gate の3 job に必要。
+  // 他 job は needs: changes の cascade で skip されるため不要だが、この3つが欠けると
+  // private repo の PR で CI が走る（#551 違反）か、private PR に恒常的な赤が付く。
+  const GUARD = "github.event_name != 'pull_request' || github.event.repository.visibility == 'public'";
+  for (const job of ['changes', 'secret-scan', 'required-gate']) {
+    const start = ci.indexOf(`\n  ${job}:`);
+    assert.ok(start !== -1, `ci.yml に ${job} job が見つからない`);
+    const rest = ci.slice(start + 1);
+    const nextJob = rest.search(/\n {2}[a-z][a-z0-9-]*:\n/);
+    const block = nextJob === -1 ? rest : rest.slice(0, nextJob);
+    assert.ok(
+      block.includes(GUARD),
+      `ci.yml の ${job} job に visibility ガードが無い（PR 起動を public に限る条件）。` +
+        '正本: docs/ai/rules/ci-run.md「PR 起動の適用範囲」',
+    );
+  }
+
+  // required-gate は always() との AND を保つ（always() を落とすと上流 skip で job ごと skip され、
+  // branch protection が skipped required を成功扱いにする穴が戻る。#430）
+  const gateStart = ci.indexOf('\n  required-gate:');
+  const gateBlock = ci.slice(gateStart, gateStart + 1200);
+  assert.match(
+    gateBlock,
+    /if: always\(\) &&/,
+    'required-gate の if から always() が落ちている（上流 skip 時に job ごと skip され required が素通りする）',
+  );
+});

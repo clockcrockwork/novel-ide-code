@@ -424,7 +424,7 @@ node scripts/agent-memory.js validate
 - [ ] `npm run security:secrets` が検出 0（[3](#3-secret-scan-手順gitleaks--trufflehog-不採用)）
 - [ ] strict pass（allowlist なし）が検出 0、または検出箇所が実トークンでないことを確認済み（[3](#3-secret-scan-手順gitleaks--trufflehog-不採用)）
 - [ ] フィクスチャ・docs に実作品本文・設計カードが混入していない（[4](#4-本文設計カード非公開-docs-混入確認手順)）
-- [ ] 生成 tree で `npm ci && npm run check`（lint / check:thresholds / test）が green（push 前ゲート。`docs/planning/repo-split-execution.md` §4 step 5.5。ラウンド3運用性4/仕様S22）
+- [ ] 生成 tree の**捨てコピーを一時 Git 化してから** `npm ci && npm run check`（lint / check:thresholds / test）が green（push 前ゲート。`rm -rf <捨てコピー> && cp -r <生成した tree> <捨てコピー> && cd <捨てコピー> && git init && git add -A && npm ci && npm run check`。**`git init && git add -A` を省略しない**——`git ls-files` で対象を取るテストは非 Git ツリーでは skip され、suite が green のまま通る〔fail-open〕。手順の正本は `docs/planning/repo-split-execution.md` §4 step 5.5。ラウンド3運用性4/仕様S22）
 - [ ] `.gitignore` で `.env*` / `*.local` が ignore され（`git check-ignore` で確認）、追跡対象に env/local/`worker/.dev.vars` が無く、`.mcp.json` ・wrangler 設定に実シークレットが無い（[5](#5-env--api-key--local-設定-除外確認)）
 - [ ] `README.md` / `.github/SECURITY.md` が public 向けに正確（[6](#6-readme--license--security--contributing-の最小構成)）
 - [ ] `LICENSE`（プロプライエタリ / 全権利留保）を追加済み（[6](#6-readme--license--security--contributing-の最小構成)）

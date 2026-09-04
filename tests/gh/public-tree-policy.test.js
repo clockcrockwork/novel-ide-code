@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   CONTROL_ONLY_DIRS,
@@ -231,6 +232,29 @@ test(
     assert.equal(counts.get('invalid-path') ?? 0, 0, `invalid-path 誤検出: ${JSON.stringify(invalid)}`);
     // positive control: 検査自体が空回り（コーパス取得失敗で0件を誤って green にする）でないこと
     assert.ok((counts.get('include') ?? 0) >= 1, 'include が0件（コーパス取得の空回りの疑い）');
-    assert.ok((counts.get('control-only') ?? 0) >= 1, 'control-only が0件（コーパス取得の空回りの疑い）');
+    // control-only の期待値は「どのツリーで走っているか」で変わる。control repo には
+    // control-only 4ディレクトリが実在するので、分類器が実際に判別していることを確認する
+    // positive control として 1 件以上を要求する。一方 sanitized な public tree では
+    // それらが除外されているのが正常なので、0 件を期待する。
+    // 「コーパスが空でない」ことは上の include の assertion が担保している。
+    // else 側の検知力は限定的（通常の混入は fs 上にもディレクトリを作るため existsSync が
+    // true になり if 側へ落ちる）。実際に発火するのは case-sensitive FS での大小変種混入
+    // （`docs/PLANNING/` 等。isControlOnlyPath は大小非依存だが existsSync は素の名前で見る）。
+    // 条件①の本体ゲートは step 2 の manifest diff と step 4 の find 側にある。
+    const hasControlOnlyDirs = CONTROL_ONLY_DIRS.some((dir) =>
+      existsSync(join(REAL_CORPUS_CWD, dir)),
+    );
+    if (hasControlOnlyDirs) {
+      assert.ok(
+        (counts.get('control-only') ?? 0) >= 1,
+        'control-only が0件（control-only ディレクトリが実在するのに分類されていない）',
+      );
+    } else {
+      assert.equal(
+        counts.get('control-only') ?? 0,
+        0,
+        'control-only ディレクトリが無いツリー（sanitized public tree）なのに control-only と分類されたパスがある',
+      );
+    }
   },
 );
