@@ -119,3 +119,5 @@ MVP 段階定義（Alpha/Beta/Gamma/Delta）は [docs/MVP_PLAN.md](docs/MVP_PLAN
 ### コントリビューション
 
 レビュー方針は [docs/REVIEW_GUIDELINES.md](docs/REVIEW_GUIDELINES.md) を参照。
+
+<!-- bootstrap: required check を露出させるための一時 PR -->
