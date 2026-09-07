@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "hono": "^4.13.2"
+    "hono": "^4.13.5"
   },
   "engines": {
     "node": ">=22",
