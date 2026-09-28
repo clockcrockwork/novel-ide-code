@@ -32,7 +32,7 @@ describe('DeleteFolderModal — empty folder', () => {
     });
 
     render(<DeleteFolderModal />);
-    expect(screen.getByText('この空のフォルダを削除しますか？')).toBeInTheDocument();
+    expect(screen.getByText('このフォルダを削除しますか？')).toBeInTheDocument();
     expect(screen.queryByText(/件のファイルがあります/)).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: '削除' }));
