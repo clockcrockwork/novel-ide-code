@@ -255,10 +255,8 @@ export default function FileDropdown({ onClose }) {
     splitOpen,
     openSplitFile,
     deleteFile,
-    deleteFolder,
     moveFile,
     newFile,
-    createFolder,
     isLoaded,
     ghUser,
     openGithubModal,
@@ -274,6 +272,7 @@ export default function FileDropdown({ onClose }) {
   );
 
   const setNameInputModal = useUIStore((s) => s.setNameInputModal);
+  const setDeleteFileModal = useUIStore((s) => s.setDeleteFileModal);
 
   const explorerExpanded = useUIStore((s) => s.explorerExpanded);
   const toggleExplorerFolder = useUIStore((s) => s.toggleExplorerFolder);
@@ -326,12 +325,16 @@ export default function FileDropdown({ onClose }) {
   );
   const handleDelete = useCallback(
     (id, name) => {
-      if (window.confirm(`「${name}」を削除しますか？`)) {
-        deleteFile(id);
-        onClose();
-      }
+      setDeleteFileModal({
+        fileId: id,
+        fileName: name,
+        onConfirm: () => {
+          deleteFile(id);
+          onClose();
+        },
+      });
     },
-    [deleteFile, onClose],
+    [deleteFile, onClose, setDeleteFileModal],
   );
   const handleMove = useCallback((fileId) => {
     setMovingFileId(fileId);
@@ -354,39 +357,35 @@ export default function FileDropdown({ onClose }) {
 
   const handleNewSubfolder = useCallback(
     (parentId) => {
-      const name = window.prompt('フォルダ名を入力してください');
-      if (name?.trim()) {
-        createFolder(name.trim(), parentId);
-        ensureExplorerExpanded([parentId]);
-      }
+      setNameInputModal({
+        mode: 'folder',
+        parentId,
+        onCreated: () => ensureExplorerExpanded([parentId]),
+      });
     },
-    [createFolder, ensureExplorerExpanded],
+    [ensureExplorerExpanded, setNameInputModal],
   );
 
   const handleDeleteFolder = useCallback(
     (node) => {
       const count = countDescendantFiles(node.id, files, folders);
-      if (count === 0) {
-        if (window.confirm(`「${node.name}」を削除しますか？`)) deleteFolder(node.id);
-      } else {
-        setDeleteFolderModal({
-          folderId: node.id,
-          folderName: node.name,
-          folderParentId: node.parentId ?? null,
-          fileCount: count,
-        });
-      }
+      setDeleteFolderModal({
+        folderId: node.id,
+        folderName: node.name,
+        folderParentId: node.parentId ?? null,
+        fileCount: count,
+      });
     },
-    [files, folders, deleteFolder, setDeleteFolderModal],
+    [files, folders, setDeleteFolderModal],
   );
 
   const handleNewFolder = useCallback(() => {
-    const name = window.prompt('フォルダ名を入力してください');
-    if (name?.trim()) {
-      createFolder(name.trim());
-      onClose();
-    }
-  }, [createFolder, onClose]);
+    setNameInputModal({
+      mode: 'folder',
+      parentId: null,
+      onCreated: onClose,
+    });
+  }, [onClose, setNameInputModal]);
 
   const clearDragOverHighlight = useCallback(() => {
     const prev = dragOverTargetRef.current;
