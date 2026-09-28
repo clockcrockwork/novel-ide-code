@@ -6,7 +6,7 @@ import NameInputModal from './NameInputModal';
 // FileDropdown（.fdrop）は transform + overflow:hidden を持つため、内側で描画すると
 // overlay の position:fixed がドロップダウン基準になりクリップされる。
 export default function NameInputModalHost() {
-  const { createWork, renameFile } = useApp();
+  const { createWork, renameFile, createFolder } = useApp();
   const nameInputModal = useUIStore((s) => s.nameInputModal);
   const setNameInputModal = useUIStore((s) => s.setNameInputModal);
 
@@ -26,6 +26,21 @@ export default function NameInputModalHost() {
         initialValue={nameInputModal.initial}
         submitLabel="変更"
         onSubmit={(name) => renameFile(nameInputModal.fileId, name)}
+        onClose={close}
+      />
+    );
+  }
+  if (nameInputModal.mode === 'folder') {
+    const parentId = nameInputModal.parentId ?? null;
+    return (
+      <NameInputModal
+        title={parentId === null ? '新規フォルダを作成' : 'サブフォルダを作成'}
+        submitLabel="作成"
+        onSubmit={async (name) => {
+          const result = await createFolder(name, parentId);
+          if (result?.ok) nameInputModal.onCreated?.(result);
+          return result;
+        }}
         onClose={close}
       />
     );

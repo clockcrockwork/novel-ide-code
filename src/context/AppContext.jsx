@@ -789,17 +789,17 @@ export function AppProvider({ children }) {
     metadataActions.ensureFileMetadata(f.id, { title: name });
   };
 
-  const createFolder = (name, parentId = null) => {
+  const createFolder = async (name, parentId = null) => {
     const safeName = sanitizeFileName(name, NAME_MAX);
-    if (!safeName) return;
+    if (!safeName) return { ok: false, reason: 'フォルダ名を入力してください' };
     const id = globalThis.crypto?.randomUUID
       ? globalThis.crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const createdAt = Date.now();
-    // Compute maxOrder from current render-time state (outside updater) so dbPut
-    // always receives a defined object. Race condition is not a concern in this
-    // single-user app where folder creation is sequential (gated by window.prompt).
-    const maxOrder = folders.reduce((m, f) => Math.max(m, f.sortOrder ?? 0), -1);
+    // モーダル化後は window.prompt の同期ブロックに依存しない。store の最新値から採番し、
+    // 同一ティック内の stale closure で sortOrder が重複しないようにする。
+    const currentFolders = useFoldersStore.getState().folders;
+    const maxOrder = currentFolders.reduce((m, f) => Math.max(m, f.sortOrder ?? 0), -1);
     const newFolder = {
       id,
       name: safeName,
@@ -808,7 +808,14 @@ export function AppProvider({ children }) {
       createdAt,
     };
     setFoldersRaw((p) => [...p, newFolder]);
-    dbPut('folders', newFolder).catch(console.warn);
+    try {
+      await dbPut('folders', newFolder);
+      return { ok: true, folderId: id };
+    } catch (e) {
+      console.warn('[createFolder] 保存に失敗', e);
+      setFoldersRaw((p) => p.filter((f) => f.id !== id));
+      return { ok: false, reason: 'フォルダの保存に失敗しました' };
+    }
   };
 
   // 作品を作成する: workSettings レコード → トップレベル folder → folderMeta.workId 紐付けの順

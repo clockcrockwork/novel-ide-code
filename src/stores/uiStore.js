@@ -51,7 +51,8 @@ export const useUIStore = create()(
       ghView: 'repos',
       authError: false,
       deleteFolderModal: null, // null | { folderId, folderName, folderParentId, fileCount }
-      nameInputModal: null, // null | { mode: 'work' } | { mode: 'rename', fileId, initial }（#214）
+      deleteFileModal: null, // null | { fileId, fileName, onDeleted?: ()=>void }
+      nameInputModal: null, // null | { mode: 'work'|'rename'|'folder', ... }（#214 / #391）
       clearDataModal: null, // null | {} — ローカルデータ全削除の確認 (#279)
       restoreDataModal: null, // null | {} — JSON バックアップからの復元の確認 (#216 / #219)
       rubyEditPopup: null, // null | { pos: number, base: string, reading: string, x: number, y: number }
@@ -157,6 +158,7 @@ export const useUIStore = create()(
         })),
       clearAuthError: () => set({ authError: false }),
       setDeleteFolderModal: (v) => set({ deleteFolderModal: v }),
+      setDeleteFileModal: (v) => set({ deleteFileModal: v }),
       setNameInputModal: (v) => set({ nameInputModal: v }),
       setClearDataModal: (v) => set({ clearDataModal: v }),
       setRestoreDataModal: (v) => set({ restoreDataModal: v }),
