@@ -78,7 +78,7 @@ export default function DeleteFolderModal() {
         {isEmpty ? (
           <>
             <p style={{ margin: '16px 0 8px', fontSize: 13, color: 'var(--tx2)', lineHeight: 1.6 }}>
-              この空のフォルダを削除しますか？
+              このフォルダを削除しますか？
             </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
               <button ref={cancelRef} type="button" className="btn-ghost" onClick={close}>
