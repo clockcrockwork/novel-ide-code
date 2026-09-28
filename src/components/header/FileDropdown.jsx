@@ -254,7 +254,6 @@ export default function FileDropdown({ onClose }) {
     secondaryFid,
     splitOpen,
     openSplitFile,
-    deleteFile,
     moveFile,
     newFile,
     isLoaded,
@@ -328,13 +327,10 @@ export default function FileDropdown({ onClose }) {
       setDeleteFileModal({
         fileId: id,
         fileName: name,
-        onConfirm: () => {
-          deleteFile(id);
-          onClose();
-        },
+        onDeleted: onClose,
       });
     },
-    [deleteFile, onClose, setDeleteFileModal],
+    [onClose, setDeleteFileModal],
   );
   const handleMove = useCallback((fileId) => {
     setMovingFileId(fileId);
