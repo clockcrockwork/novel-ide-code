@@ -51,7 +51,7 @@ export const useUIStore = create()(
       ghView: 'repos',
       authError: false,
       deleteFolderModal: null, // null | { folderId, folderName, folderParentId, fileCount }
-      deleteFileModal: null, // null | { fileId, fileName, onConfirm: ()=>void }
+      deleteFileModal: null, // null | { fileId, fileName, onDeleted?: ()=>void }
       nameInputModal: null, // null | { mode: 'work'|'rename'|'folder', ... }（#214 / #391）
       clearDataModal: null, // null | {} — ローカルデータ全削除の確認 (#279)
       restoreDataModal: null, // null | {} — JSON バックアップからの復元の確認 (#216 / #219)
