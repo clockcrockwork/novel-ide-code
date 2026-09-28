@@ -17,7 +17,7 @@
 
 ## authority routing（shadow assessment）の起動手順
 
-[`docs/agent-workflows/review-angles/README.md`](../../agent-workflows/review-angles/README.md)「起動手順（orchestrator）」の手順2（`review:plan` 実行）は、snapshot ディレクトリに **valid な shadow assessment**（`shadow-routing.json`）が既にある場合にだけ authority mode（semantic `selectedAngles` が通常 angle の正本）へ切り替わる。同 README は consumer 非依存の正本であり `shadow-routing.js` は novel-ide 固有スクリプトのため、具体的な実行手順は手順化されていない——**本節が novel-ide 側の補完手順**である（[`docs/planning/review-system-phase5-plan.md`](../../planning/review-system-phase5-plan.md) §3.5 が assessment のスキーマ契約）。
+[`docs/agent-workflows/review-angles/README.md`](../../agent-workflows/review-angles/README.md)「起動手順（orchestrator）」の手順2（`review:plan` 実行）は、snapshot ディレクトリに **valid な shadow assessment**（`shadow-routing.json`）が既にある場合にだけ authority mode（semantic `selectedAngles` が通常 angle の正本）へ切り替わる。同 README は consumer 非依存の正本であり `shadow-routing.js` は novel-ide 固有スクリプトのため、具体的な実行手順は手順化されていない——**本節が novel-ide 側の補完手順**である（`docs/planning/review-system-phase5-plan.md` §3.5 が assessment のスキーマ契約）。
 
 authority mode を使う場合、手順2（`review:plan`）の前に:
 

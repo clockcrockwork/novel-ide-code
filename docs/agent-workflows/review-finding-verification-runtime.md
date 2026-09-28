@@ -246,5 +246,5 @@ verifier 専用の起動 wrapper を追加する場合は `NON_ANGLE_EXEC_BASELI
 ## 関連
 
 - [review-findings-runtime.md](review-findings-runtime.md) — #647: source of truth の finding artifact・aggregation 規則の正本
-- [docs/planning/review-system-phase5-plan.md](../planning/review-system-phase5-plan.md) §7 — 実装状況の注記
+- `docs/planning/review-system-phase5-plan.md` §7 — 実装状況の注記
 - [docs/ai/rules/docs-maintenance.md](../ai/rules/docs-maintenance.md)「agent-commons の projected file」— `review-finding-contract.js` を手編集しない理由

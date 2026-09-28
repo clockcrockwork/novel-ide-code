@@ -360,6 +360,6 @@ retrospective 分析が同じ finding を参照できるようにしてよい。
 
 ## 関連
 
-- [docs/planning/review-system-phase5-plan.md](../planning/review-system-phase5-plan.md) §7・§8 — 設計判断・移行方針の正本
+- `docs/planning/review-system-phase5-plan.md` §7・§8 — 設計判断・移行方針の正本
 - [review-angles/finding-criteria.md](review-angles/finding-criteria.md) — 所見の計上基準（scope_relation / severity / evidence / Actionable の人間向け説明。本書はその machine 実装）
 - [docs/ai/rules/docs-maintenance.md](../ai/rules/docs-maintenance.md)「agent-commons の projected file」— `review-finding-contract.js` を手編集しない理由
