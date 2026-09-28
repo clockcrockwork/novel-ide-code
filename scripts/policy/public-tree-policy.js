@@ -4,7 +4,7 @@
 // check-doc-links.js のトップレベル import 群を巻き込まないことが要件（#345 レビュー指摘2）。
 //
 // 正本の階層:
-//   - 除外ディレクトリ（denylist）の意味論の正本: docs/security/public-release-checklist.md §2
+//   - 除外パス（denylist。ディレクトリ・個別ファイル）の意味論の正本: docs/security/public-release-checklist.md §2
 //   - コード上の単一正本: 本ファイル（check-doc-links.js / build-public-tree.js / テストが import）
 // 素の startsWith によるパス前方一致は禁止（`docs/planning-public/` 等の別ディレクトリ誤判定を招く）。
 // セグメント境界で判定する（CLAUDE.md / INVARIANTS.md #12 と同趣旨）。
@@ -21,6 +21,12 @@ import { relative, isAbsolute, sep } from 'node:path';
 // 同期の実装自体は本リストへの追加とは別作業（docs/agent-memory/README.md 参照）。
 export const CONTROL_ONLY_DIRS = ['docs/pr/', 'docs/pr-analysis/', 'docs/planning/', 'docs/agent-memory/records/'];
 
+// public 側に出さない個別ファイル（root 相対の完全一致・大文字小文字非依存）。
+// Dependabot 設定は public repo 自身を依存更新 PR の発生元にしてしまう（public は canonical からの
+// projection であり、依存更新の評価・適用は control repo 側の責務。public 側で生成された PR を
+// 取り込むと canonical を迂回する）。GitHub が読む `.yml` / `.yaml` の両方を除外する（#347 / #345）。
+export const CONTROL_ONLY_FILES = ['.github/dependabot.yml', '.github/dependabot.yaml'];
+
 // public tree に **tracked されていてはいけない** secret 風パス。gitignore 済みのはずだが、
 // 過去の `git add -f` 等で誤って追跡された場合に silent 除外すると (a) 元リポジトリの問題を
 // 隠蔽し (b) `.env.example` まで巻き添えで消える。よって build-public-tree.js は「除外」ではなく
@@ -28,11 +34,12 @@ export const CONTROL_ONLY_DIRS = ['docs/pr/', 'docs/pr-analysis/', 'docs/plannin
 // （.gitignore の `.env*` + `!.env.example` と同一セマンティクス）。
 export const ENV_EXAMPLE_ALLOW = '.env.example';
 
-// パスがいずれかの control-only ディレクトリ配下（またはそのディレクトリ自身）か。
+// パスが control-only ファイルそのものか、いずれかの control-only ディレクトリ配下（またはそのディレクトリ自身）か。
 // 大文字小文字非依存で判定する（`docs/Planning/` のような大小揺れの private ディレクトリが
 // denylist をすり抜けて public に漏れるのを防ぐ。denylist 方式の fail-open 方向を保守的に締める。#345 adversarial 🟡）。
 export function isControlOnlyPath(relPosix) {
   const p = relPosix.toLowerCase();
+  if (CONTROL_ONLY_FILES.some((f) => p === f.toLowerCase())) return true;
   return CONTROL_ONLY_DIRS.some((d) => {
     const dir = d.replace(/\/+$/, '').toLowerCase();
     return p === dir || p.startsWith(dir + '/');
@@ -93,7 +100,7 @@ export function isForbiddenSecretPath(relPosix) {
 // という名前のディレクトリ（例: `docs/ai/agent-memory/`・root 直下の `agent-memory/`）や
 // `docs/agent-memory-old/` のような類似名ディレクトリは本規則で検知しない。運用としてそれらの
 // ディレクトリを作らないことで担保する（public-release-checklist.md §2 に明記）。
-// denylist 方式（#345 accepted 記憶 mem-20260726-87958f）と整合させ allowlist は使わない——
+// denylist 方式（#345 accepted 記憶 mem-20260928-2018f0。旧 mem-20260726-87958f を置換）と整合させ allowlist は使わない——
 // `.md` は記憶レコードの正本形式ではなく説明文書（README.md・digest.md 等）の形式のため、
 // `.md` のみを除外対象とする（それ以外の拡張子は将来 digest が新形式で出力される場合も
 // 含め fail-closed 側に倒す。ラウンド3減算 S-2／ラウンド4敵対的1／round6 F-2）。

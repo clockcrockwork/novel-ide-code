@@ -6,7 +6,9 @@
   "picks": {
     "groups": [
       "reviews",
-      "projection-guard"
+      "projection-guard",
+      "reviews-v2-staged",
+      "reviews-structured-findings-staged"
     ],
     "assets": []
   },

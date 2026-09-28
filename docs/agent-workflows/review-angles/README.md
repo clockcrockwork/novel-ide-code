@@ -8,7 +8,35 @@
 > **Cost note:** 全レビュアーが diff をアンカーにすると盲点が相関し、セルフ収束宣言後に外部レビューが新規所見を出し続ける（外部レビューで実証された）
 <!-- agent-commons:generated source=review-angles-readme version=1.0.0 — 手編集しない。正本は agent-commons/core と docs/agent-workflows/overlays -->
 
-包括的レビューは全員が **diff そのものをアンカー**にして読むため盲点が相関する。**観点の違い＝アンカーする ground truth の違い**として7系統のレビュアーを定義し、[pre-commit-review.md](../pre-commit-review.md) / [review-pr.md](../review-pr.md) のレビューループに組み込む（運用性・状態遷移系統の追加と加算式 Tier は Gemini レビュアー退役に伴うギャップ分析より。減算・清掃系統と LIMIT 収束を追加した経緯は `docs/planning/review-system-phase2-plan.md`。旧「5系統」呼称は本 README・関連 docs 中に残る場合がある — 現行は7系統）。
+包括的レビューは全員が **diff そのものをアンカー**にして読むため盲点が相関する。**観点の違い＝アンカーする ground truth の違い**として7系統のレビュアーを定義し、[pre-commit-review.md](../pre-commit-review.md) / [review-pr.md](../review-pr.md) のレビューループに組み込む（運用性・状態遷移系統の追加と加算式 Tier の経緯は [rationale.md](rationale.md) を参照。減算・清掃系統と LIMIT 収束を追加した経緯は `docs/planning/review-system-phase2-plan.md`。旧「5系統」呼称は本 README・関連 docs 中に残る場合がある — 現行は7系統）。
+
+## 実行 authority の階層（canonical execution authority と legacy compatibility）
+
+観点選択の正本は、consumer が semantic routing（signal-driven review orchestration。diff から selected angles / effective angles を導出する authority レイヤー）を採用しているかどうかで変わる。両者を混同しない。
+
+1. **Canonical execution authority（consumer が semantic routing を採用している場合）**: その回に routing が導出した selected angles / effective angles が必須系統の正本になる。semantic routing 自体の実装（signal 抽出・分類・model 判定・machine assessment）は consumer 固有の責務であり、本 README・commons はこれを持たない（purity: routing policy は commons に置かない）。commons が提供するのは各系統の共通識別・anchor purity・出力契約（下記「7系統の定義」「出力契約」等）と `finding-criteria.md` の finding 語彙であり、selected/effective angles はこの共通語彙の中から選ばれる。escalation（下記「実効 Tier の更新」に相当する仕組み）・`incomplete` / `error` 時に集合を空へ倒さない anti-skip・条件起動系統（下記「条件起動系統」）は、semantic routing 採用の有無に関わらず一貫して適用する契約である。
+2. **Legacy compatibility / fallback（本 README の Tier 表）**: 下記「Tier（対象系統の判定・コスト制御）」の表と加算規則は、
+   - semantic routing を**まだ採用していない** consumer にとっては、**現時点でも有効なそのままの決定契約**である（本 README 単体で完結する。本リポジトリの fixture consumer はこちらに該当する）。
+   - semantic routing を**採用した** consumer にとっては、routing assessment が unavailable / invalid / stale / error のときに適用する、**凍結された conservative な fallback 契約**としての役割に限定される。
+
+   いずれの場合も Tier 表・Tier→必須系統の対応表そのものは削除・撤去しない。fallback として機能し続ける必要があるためであり、**Tier の完全撤去は、routing-unavailable 時の代替 fallback を別途設計してから初めて検討できる**（本 README 単体の変更では撤去しない。撤去する場合も本節の「いずれの場合も」以下は撤去工程の一部として明示的に更新すること）。
+3. **Conditional / sidecar responsibilities**: 記憶適合（memory）・`/security-review`・最終独立レビュー・retrospective は、selected/effective angles や Tier の必須系統集合とは別の起動条件を持つ独立した責務であり、どちらの authority モデルでも同じ条件契約を維持する（記憶適合は下記「条件起動系統」が正本。`/security-review`・最終独立レビュー・retrospective はそれぞれ別 workflow 文書が正本）。selected/effective angles・Tier のどちらの通常系統集合にも算入しない。
+
+**この階層は commons の実装ではなく契約の記述である。** semantic routing を持たない consumer は本 README の Tier 表をそのまま採用してよく、その場合は上記1.は該当せず2.が唯一の決定契約になる。どの consumer が現時点でどちらの状態か（semantic routing 未採用／採用済み）は、各 consumer 側の authority switch 状況を見れば分かる（本 README では管理しない — 下記 testquality の activation 状況と同じ扱い）。
+
+### testquality: canonical 系統定義と activation の分離（具体例）
+
+test-quality 系統は、上記の階層とは別に、**canonical 系統定義とその activation が独立した決定である**ことを示す具体例として存在する。
+
+- **canonical 系統定義**: [angle-test-quality.md](angle-test-quality.md) / `review-testquality`（machine ID: `testquality`）と、[finding-criteria.md](finding-criteria.md) の `scope_relation` / `severity` / `evidence` / `provenance` を使う finding 契約が、commons 側の正本として存在する。
+- **activation は consumer 側の裁量**: canonical 定義があるだけでは、どの consumer の実際の起動集合（本 README の Tier 表・`ANGLE_TOKENS` 相当の registry・実行設定）にも自動登録されない。登録するかどうか・いつ行うかは各 consumer が自身の authority switch 工程で決める。**`ANGLE_TOKENS`（launchable な角度として認識されること）への登録と、Tier 表の必須系統（`Full` 等）への追加は独立した決定である** — 前者を行っても後者へ自動昇格しない（consumer は「registry 登録はするが Tier の必須系統には含めない」という組み合わせを選んでよい）。semantic routing を採用した consumer が selected angles へ `testquality` を含める場合も、それによって legacy Tier 側の必須集合（`Full` 等）が自動的に変わることはない — 2つの決定は独立したままである。
+
+この区分は registry 上でも表現される: testquality の canonical asset（`angle-testquality` / `claude-agent-review-testquality`）は既存 `reviews` group には含まれず、`reviews-v2-staged` group にのみ所属する。**ただし「`reviews` pick consumer の projection 結果が変わらない」という意味ではない**。正確には次のとおり:
+
+- testquality 追加によって、既存 `reviews` group の asset **集合（ファイル数）は増えない**（`angle-testquality` / `claude-agent-review-testquality` は projection されない）。
+- 一方、既存 `reviews` group の canonical asset（`finding-criteria` / `subtractive` / `riskmodel` / `quality` / `adversarial` / `cleanup` / `spec` / `operability` / workflow docs 等）は**内容そのものが本 Phase 5 semantic contract へ更新**されている。
+- consumer がこの agent-commons revision へ lock ファイル（受領証）を進めれば、pick している asset の**内容は変わる**（ファイル集合は変わらなくても中身は変わる）。
+- **lock ファイルの更新が、この内容がいつ consumer へ届くかを決める。** 各 consumer は自身の authority switch 工程で lock をこの revision（またはそれ以降）へ進めるまで、本 Phase 5 semantic contract の内容を受け取らない（projection の `--check` は lock 済み revision との一致を検証するため、consumer が lock を進めない限り pick している asset は旧 revision の内容のまま固定される）。lock 更新そのものが switch の実行行為であり、別途の有効化フラグは無い — どの consumer が現時点でどちらの状態かは、各 consumer 側の lock ファイルを見れば分かる（本 README では管理しない）。
 
 ## 分離原則（アンカー純度）
 
@@ -30,6 +58,25 @@
 | **清掃** | [angle-cleanup.md](angle-cleanup.md) | `review-cleanup` | diff とその周辺コード・docs（変更後に不要になったもの） | この変更で消せるようになったものが残っていないか |
 
 運用性・状態遷移系統はレビュー対象**自身**の内部性質（実行可能性・ライフサイクル・拡張性）を見る。検索型記憶に保存された過去の設計決定との適合性検出（下記「条件起動系統」の記憶適合レビュアー）とは対象が異なり、重複しない。
+
+**本表は legacy actual responsibility summary（起動時のアンカー・問いの要約）である。** 「問い」列は起動系統・アンカーの短い要約であり、各系統の詳細な責務境界の正本ではない（正本は各 `angle-*.md`）。Phase 5 で更新された責務境界の要約は次表「Phase 5 canonical reviewer responsibility matrix」を参照する。**本表・Tier 表が定義する actual 起動集合（Full = 7系統 等）はこの節の追加によって変更しない。**
+
+## Phase 5 canonical reviewer responsibility matrix（責務境界の要約）
+
+各系統の**現時点の責務境界**の要約。正本は各 `angle-*.md`（本表と正本が食い違う場合は正本を優先する）。**本表の追加は actual 起動集合を変更しない** — `testquality` を含むが、Tier 表の必須系統には追加しない（上記「testquality: canonical 系統定義と activation の分離」）。
+
+| 系統 | 責務 | 主な境界・縮小 |
+|---|---|---|
+| **減算** | 新規 surface / abstraction / rule / dependency / parallel path を「足さずに済まないか」 | machine は candidate fact まで（unused / textual duplicate 等）。cleanup の「受理後に古くなったもの」と時間的に分離 |
+| **risk-model 検証** | 想定ケース表・acceptance と実装/test の**存在・mapping** | test の強さ・oracle は test-quality へ。machine ID は `riskmodel` |
+| **仕様・ビジネスロジック** | issue / domain / contract から独立導出した期待挙動との**意味的不一致** | machine schema/format 検証を主責務にしない |
+| **敵対的** | validation / parser・classifier / acceptance-rejection boundary / fail-open-fail-closed / recovery / retry-idempotency / concurrency-race / generation-sequence invariant 等、故障境界をどう騙すか。**security 限定にしない** | 既知脆弱性パターン・secret 混入は machine。security taxonomy の網羅性は `/security-review` |
+| **コード品質** | 既存 helper/API/component の**意味的再実装**・accidental complexity・責務凝集度・repository idiom との意味的乖離 | lint / format / unused / textual duplicate / 既知 dependency 方向は machine。単純な局所 bug fix には一般的 style review を掛けない |
+| **運用性・状態遷移** | state transition / lifecycle / persistence / 非同期処理の所有権 / executable workflow / 途中失敗 / 復旧可能性 / 暗黙入力 | 記憶適合（過去の設計決定との適合性検出）とは対象が異なり混ぜない |
+| **清掃** | 変更が**受理された後**に意味的に失効した old path / fallback / comment / docs / fixture / manual check | unused export 検出・link checker の代替にしない。原則 final・localized review |
+| **test-quality**（machine ID: `testquality`。canonical 定義済み。`ANGLE_TOKENS` への registry 登録は consumer の authority switch 次第で、登録しても legacy Tier 表の必須系統には自動追加されない） | test の oracle・regression detection 能力・過剰 mock・実装詳細結合。**起動は test 差分の有無ではなく対象実装の observable behavior 変更で成立する**（production-only 変更でも review 対象になる） | line coverage police 化しない。risk-model の「存在・mapping」とは所有権を分離 |
+| **記憶適合（条件起動）** | accepted memory と diff の適合 | 通常 angle 集合へ統合しない（`conditionalAngles` のまま） |
+| **retrospective** | 外部 escape の発生原因・内部検出漏れの分析 | semantic review angle ではなく learning plane |
 
 **減算・清掃の起動位置**: 減算は他系統より**先**（入口）に起動する（足したものを他系統が診断する前に、削減・統合の余地を検証する）。清掃は他系統が**収束した最終1周のみ**起動する（修正ラウンドごとに回すと周回数が増えるため）。両系統とも `implementation` / `documentation-workflow` / `mixed` の3モードを持ち、diff の内容から自動選択する（詳細は各正本）。系統列の受理トークンは「減算」「減算レビュー」「清掃」「清掃レビュー」のいずれも可（正本: `scripts/agent/review-angle-tokens.js`）。
 
@@ -322,6 +369,8 @@ npm run review:plan -- --memory-hits <n>            # Tier・実効Tier・起動
 
 **script が使えない環境**（`.git` に書けない・Node が無い等）では、手順3〜9 の判断規則（トリガー表・実効 Tier 表・継続/リフレッシュ表）をそのまま手で適用する。script は判断の**自動化**であって、判断規則の正本は本 README である。
 
+**consumer 固有の前提手順**: consumer によっては、手順2（`npm run review:plan`）の判定結果に影響する consumer 固有の準備手順（例: 起動系統を machine assessment で選ぶ authority routing の入力生成）を持つ。本 README は consumer 非依存の正本のため、そうした手順自体はここへ書かない——存在するかどうか・具体的な実行方法は consumer 側のリポジトリ規約ドキュメントを手順2の前に確認すること。**省略しても本 README の手順自体は完走する**（consumer 側は入力が無ければ安全側のフォールバックへ倒れるよう設計する）。
+
 ## 起動のスケジューリング（dirty obligation）
 
 段階は**義務単位**の dirty 判定で選ぶ。dirty の条件は「再探索トリガーが該当した」＝計画がその系統に run:true を返したこと。未達の義務（一度も完了していない・直近が `error` / `incomplete`）は `selectMode` が run:true を返すためここに含まれる。**未解消所見は条件に入らない**（所見の有無を machine が持たないため。所見に対応する再起動が必要なら起動側が `escalate` で要求する）。実行するのは **dirty な義務のうち最も早い段階**のものだけ。
@@ -342,9 +391,9 @@ npm run review:plan -- --memory-hits <n>            # Tier・実効Tier・起動
 - **dirty でない義務は起動しない**。再探索トリガーが該当しない系統は、段階が回ってきても起動されない（計画上は「義務は満たされている」と報告される）
 - **ブロック条件には必ず解除経路が対になる**。収束をブロックする条件（未達義務）は、それを解除できる行動を**同じ計画が提案する**。計画は「収束していないのに次にできる行動が1つも無い」状態を検出したら fail-loud で止まる（黙って「収束: いいえ」を出し続けない）
 
-**この段階選択は以前から同じ規則で動いている**（旧実装の `settled` の否定がそのまま dirty に対応する）。PR2' で変えたのは判定ロジックではなく**観測可能性**で、計画の各行に `dirty` を出し、充足済みの義務を「保留」ではなく充足として報告するようにした。
+**この段階選択は以前から同じ規則で動いている**（旧実装の `settled` の否定がそのまま dirty に対応する。変更の経緯は [rationale.md](rationale.md)「起動スケジューリング実装の経緯」を参照）。
 
-**注意**: PR1 で減算が 38 周まで伸びた原因はこの段階選択ではない。実際の駆動要因は (a) 周回の数え方、(b) 所見の分類・裁定の置き場所（いずれも `docs/planning/review-memory-boundary.md` §3・§4 で境界を決め直した）、(c) 検出器が docs の 1 行変更で減算トリガーを立てること（後続 PR の範囲）。段階選択を変えてもこの発散は止まらない。
+**注意**: 減算の周回数が過去に異常へ伸びた実測要因はこの段階選択ではない。実際の駆動要因は (a) 周回の数え方、(b) 所見の分類・裁定の置き場所（いずれも `docs/planning/review-memory-boundary.md` §3・§4 で境界を決め直した）、(c) 検出器が docs の 1 行変更で減算トリガーを立てること（現在も未解消。検出器側の改善余地として残る）。段階選択を変えてもこの発散は止まらない。実測値・詳細は [rationale.md](rationale.md) を参照。
 
 ## 起動記録の規律（計画との照合 / stale / 冪等性）
 
@@ -422,6 +471,7 @@ Tier: Light（通常コード変更・高リスク領域外）
 
 <!-- overlay: このリポジトリの関連 issue（採用方針・機械ゲート実証・セカンドオピニオン）の履歴メモ -->
 - issue #397（旧5系統の採用方針。完了・close 済み）/ #396（レビューループ機械ゲート・実証データ）/ #357（セカンドオピニオン。完了・close 済み）
+- [rationale.md](rationale.md) — 本 README の経緯・実証・過去の判断根拠（orchestrator が毎回読む必要はない）
 - `docs/planning/review-system-phase2-plan.md` — 減算・清掃系統・新 Tier（Record/Docs）・LIMIT 収束の実施計画
 - [pre-commit-review.md](../pre-commit-review.md) — 組み込み先（ステップ3・6）。収束条件・周回上限・受理文法の正本
 - [review-pr.md](../review-pr.md) — 組み込み先（ステップ6・7）

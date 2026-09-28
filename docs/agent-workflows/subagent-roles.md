@@ -166,6 +166,7 @@ orchestrator がタスク開始時に実装計画へ含める：
 - [docs/agent-workflows/codebase-recon.md](codebase-recon.md) — 実装前の既存実装調査
 - [docs/agent-workflows/pre-commit-review.md](pre-commit-review.md) — コミット前セルフレビュー
 - [docs/agent-workflows/review-angles/README.md](review-angles/README.md) — 観点別レビュー（7系統のアンカー・Tier・出力契約の正本）
+- [docs/agent-workflows/review-findings-runtime.md](review-findings-runtime.md) — 所見を agent-commons 共通 finding contract に基づく machine-readable artifact として記録・決定的集約する任意ツール（#647。所見の集約自体は必須化しない）
 - [docs/agent-workflows/systematize.md](systematize.md) — 自動化候補の提案
 - [docs/agent-workflows/skill-design-rubric.md](skill-design-rubric.md) — 各正本が満たすべき6項目
 - [docs/ai/README.md](../ai/README.md) — AI作業ルール入口

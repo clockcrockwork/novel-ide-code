@@ -60,6 +60,7 @@ npm run build  # 構造変更（import 追加・削除・ファイル移動等�
 - **減算は他系統より先に起動する**（入口。「足さずに済まないか」を他系統の診断より前に問う）。**清掃は他系統が収束した最終1周のみ起動する**（修正ラウンドごとに回さない）
 - 従来の `/code-review`（責務・DRY・潜在バグ・パフォーマンス等）の観点はコード品質系統（`review-quality`）と敵対的系統（`review-adversarial`）に吸収される。**`review-quality` は Light にも必須**（品質ゲートのフロア。理由は [review-angles/README.md](review-angles/README.md) の Tier 表脚注）。Full と Light の差は仕様・ビジネスロジック系統と運用性・状態遷移系統の有無
 - **記憶適合（条件起動）**: 起動条件・起動判定行の書式・記録方法は [review-angles/README.md](review-angles/README.md)「条件起動系統」を正本とする（本ステップでは複製しない）
+- **test-quality（`testquality`）は本ステップ（Tier 判定）の必須系統集合には含まれない。** `ANGLE_TOKENS` への canonical registry 登録（consumer 側の authority switch で行いうる）と、本ステップが要求する Tier 表の必須系統（上記7系統＋条件起動系統）への追加は独立した決定であり、前者を行っても本ステップの必須系統集合は変わらない（[review-angles/README.md](review-angles/README.md)「testquality: canonical 系統定義と activation の分離」）。testquality が実際に起動されるのは、consumer 側で authority routing が semantic assessment に基づき選択した場合のみである
 
 発見した問題はすべてステップ 6 で修正する。
 

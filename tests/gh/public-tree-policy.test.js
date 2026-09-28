@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   CONTROL_ONLY_DIRS,
+  CONTROL_ONLY_FILES,
   isControlOnlyPath,
   isForbiddenSecretPath,
   isAgentMemoryRecordPath,
@@ -47,6 +48,22 @@ test('isControlOnlyPath: 大文字小文字揺れの private ディレクトリ�
   assert.equal(isControlOnlyPath('DOCS/PR-ANALYSIS/items.json'), true);
   // 別ディレクトリを巻き込まない
   assert.equal(isControlOnlyPath('docs/PLANNING-PUBLIC/x.md'), false);
+});
+
+test('isControlOnlyPath: Dependabot 設定は root 相対の完全一致で control-only（public を依存更新 PR の発生元にしない。#347 / #345）', () => {
+  assert.deepEqual([...CONTROL_ONLY_FILES].sort(), ['.github/dependabot.yaml', '.github/dependabot.yml']);
+  assert.equal(isControlOnlyPath('.github/dependabot.yml'), true);
+  assert.equal(isControlOnlyPath('.github/dependabot.yaml'), true);
+  // 大小揺れもすり抜けない（ディレクトリ denylist と対称）
+  assert.equal(isControlOnlyPath('.GitHub/Dependabot.YML'), true);
+  // 完全一致のみ（別ファイル・ネスト・前方一致を巻き込まない）
+  assert.equal(isControlOnlyPath('.github/dependabot.yml.bak'), false);
+  assert.equal(isControlOnlyPath('.github/workflows/dependabot.yml'), false);
+  assert.equal(isControlOnlyPath('worker/.github/dependabot.yml'), false);
+  assert.equal(isControlOnlyPath('.github/SECURITY.md'), false);
+  // ディレクトリ denylist の既存挙動は不変
+  assert.equal(isControlOnlyPath('docs/pr/PR-1.md'), true);
+  assert.equal(isControlOnlyPath('docs/planning-public/x.md'), false);
 });
 
 test('isForbiddenSecretPath: .gitignore プレフィックスグロブと同義（#345 adversarial 🔴 / spec 所見3）', () => {
@@ -124,6 +141,7 @@ test('classifyPublicTreePath: 5分類（invalid-path > secret > control-only > a
   assert.equal(classifyPublicTreePath('.env.production'), 'forbidden-secret');
   assert.equal(classifyPublicTreePath('docs/planning/x.md'), 'control-only');
   assert.equal(classifyPublicTreePath('docs/agent-memory/records/x.json'), 'control-only');
+  assert.equal(classifyPublicTreePath('.github/dependabot.yml'), 'control-only');
   assert.equal(classifyPublicTreePath('docs/agent-memory/x.json'), 'agent-memory-misplaced');
   assert.equal(classifyPublicTreePath('worker/docs/agent-memory/records/x.json'), 'agent-memory-misplaced');
   assert.equal(classifyPublicTreePath('docs/agent-memory/digest.md'), 'include');

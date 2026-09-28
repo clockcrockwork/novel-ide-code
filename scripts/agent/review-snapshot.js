@@ -470,7 +470,10 @@ export function classifyFile(path, oldPath) {
 
 // ガード種（正規表現・バリデーション・分類器）の変更を patch 本文から検出する。
 // パス（scripts/agent 等）だけでは「コメント修正」まで拾うため、追加/削除行の内容も見る。
-const GUARD_CONTENT_RE =
+// export するのは、この判定基準を呼び出し側（shadow-routing.js の full-scope 判定等）が
+// 別 scope（例: prose ファイルを除いた executable ファイルだけ）へ適用したい場合に、
+// 同じ正規表現を再実装せず再利用できるようにするため。
+export const GUARD_CONTENT_RE =
   /(^[+-].*\/(?:[^/\n\\]|\\.){2,}\/[gimsuyv]*\s*[,;)\]]?\s*$)|^[+-].*\b(new RegExp|\.test\(|\.match\(|\.exec\(|validate|sanitize|classif|allowlist|denylist|escapeHtml|assertValid)/im;
 
 export function detectGuardChange(patch, changedFiles) {

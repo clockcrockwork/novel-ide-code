@@ -36,10 +36,14 @@ test('security:semgrep の引数が package.json と ci.yml の semgrep ジョ�
   );
 });
 
-// 4本（gate が存在する検出カテゴリを持つ系統）は category 部分だけが異なり、
-// 「は機械化済みの検出カテゴリ」以降の構造は逐語同一のはず。
+// 3本（gate が存在する検出カテゴリを持つ系統のうち adversarial/cleanup/subtractive）は
+// category 部分だけが異なり、「は機械化済みの検出カテゴリ」以降の構造は逐語同一のはず。
 // 3本（gate 不在の系統）は category 部分を持たず、行全体が逐語同一のはず。
-// この2グループ以外の第3のパターンが生じたら drift（PR #593 の7本テンプレ展開事故と同型）。
+// quality のみ、Phase 5 の責務縮小（意味的再実装・accidental complexity・責務凝集度・repository
+// idiom への限定）に伴い「**これらは本系統の主責務にしない。**」を明示的に追加した3本目の
+// variant を持つ（quality の Machine boundary category が「lint/format・未使用 export・textual
+// 重複・依存方向」と、機械の担当が特に誤解されやすい語彙のため。他系統には同じ曖昧さが無い）。
+// この3グループ以外の第4のパターンが生じたら drift（PR #593 の7本テンプレ展開事故と同型）。
 const ANGLE_FILES_TO_CHECK = [
   'angle-adversarial.md',
   'angle-cleanup.md',
@@ -63,7 +67,7 @@ function normalizeMachineBoundaryLine(line) {
   return idx === -1 ? line : line.slice(idx);
 }
 
-test('angle-*.md の Machine boundary 行が2バリアントに収まる（angle-memory.md を除く。テンプレ分裂検査）', () => {
+test('angle-*.md の Machine boundary 行が3バリアントに収まる（angle-memory.md を除く。テンプレ分裂検査）', () => {
   const variants = new Set();
   for (const file of ANGLE_FILES_TO_CHECK) {
     const text = readFileSync(join(ROOT, 'docs/agent-workflows/review-angles', file), 'utf-8');
@@ -71,10 +75,24 @@ test('angle-*.md の Machine boundary 行が2バリアントに収まる（angle
     variants.add(normalizeMachineBoundaryLine(line));
   }
   assert.ok(
-    variants.size <= 2,
-    `Machine boundary 行が${variants.size}バリアントに分裂している（想定は2以下）。\n` +
+    variants.size <= 3,
+    `Machine boundary 行が${variants.size}バリアントに分裂している（想定は3以下。quality の` +
+      '責務縮小に伴う正当な3本目は許容する）。\n' +
       [...variants].map((v, i) => `--- variant ${i + 1} ---\n${v}`).join('\n'),
   );
+});
+
+// angle-test-quality.md は legacy 7系統（ANGLE_FILES_TO_CHECK）の兄弟テンプレではなく、独自の
+// canonical 正本として意図的に異なる文面（mutation testing の有効性についての言及等）を持つため
+// 上記の3バリアント許容には含めない（含めると4バリアント目になり許容枠と衝突する）。ただし
+// Machine boundary 行自体が存在することだけは固定する（敵対的レビュー所見 R1: この系統の
+// drift 検査が完全に0だった）
+test('angle-test-quality.md にも Machine boundary 行が存在する（drift 検査は projection hash に委ねる）', () => {
+  const text = readFileSync(
+    join(ROOT, 'docs/agent-workflows/review-angles/angle-test-quality.md'),
+    'utf-8',
+  );
+  assert.ok(extractMachineBoundaryLine(text, 'angle-test-quality.md'));
 });
 
 // グロブから走査範囲の doc 記述と突き合わせる先頭ディレクトリ部分を取り出す。

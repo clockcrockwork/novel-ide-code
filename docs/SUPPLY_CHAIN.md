@@ -58,7 +58,7 @@ PR で `package-lock.json` が変更されている場合に確認するポイ�
 
 | 設定 | 値 | 理由 |
 |-----|-----|------|
-| `--audit-level` | `high` | moderate は Dependabot で週次管理するため CI ブロック不要 |
+| `--audit-level` | `high` | moderate は control repo の Dependabot で週次管理するため CI ブロック不要 |
 | `--omit=dev` | 有効 | ビルドツール・テストツールの脆弱性は本番攻撃面ではない |
 | 対象ディレクトリ | root・worker 両方 | worker は本番稼働する Cloudflare Worker のため必須 |
 
@@ -79,7 +79,7 @@ CI の依存インストールは lockfile に厳密一致する `npm ci` を使
 
 ## Dependabot 運用
 
-`.github/dependabot.yml` で以下の 3 エコシステムを週次（月曜）監視する。
+control repo では `.github/dependabot.yml` で以下の 3 エコシステムを週次（月曜）監視する（public projection には設定ファイルを含めない。後述）。
 
 | エコシステム | ディレクトリ | PR 上限 | グループ |
 |------------|------------|--------|--------|
@@ -90,6 +90,7 @@ CI の依存インストールは lockfile に厳密一致する `npm ci` を使
 - major バージョンアップは自動 PR を生成しない（破壊的変更を伴うため手動確認）
 - `github-actions` を含めることで SHA pin した action（後述）の更新を週次検出する。Dependabot は `uses:` 末尾のバージョンコメントを読んで SHA 差し替え PR を生成する
 - security アップデートは優先して取り込む。通常の minor/patch は週次バッチで処理する
+- **`.github/dependabot.yml` は control-only**（`scripts/policy/public-tree-policy.js` の `CONTROL_ONLY_FILES`）。public review surface は canonical（control repo）からの sanitized projection であり、public 側で依存更新 PR を生成させると canonical を迂回した変更元になる（例: control 側で `ignore` している semver-major 更新が public 側だけで生成される）。依存更新の評価・適用は control repo でのみ行い、public には projection で追従させる。public repo の脆弱性**観測**（Dependabot alerts）と自動 **fix PR 生成**（security update PR）は分けて扱い、後者は public 側では使わない（repository 設定側の管理であり本ファイルでは強制できない）
 - **更新はパッケージ単位ではなくグループ単位の PR で届く。** パッケージ単位に分割された PR は、peer を完全一致でピンする依存群（`@tiptap/*` 等）を単独ではロック解決できない形で届けてしまう（単独マージすると `npm ci` が ERESOLVE で失敗する）。npm は本番／開発で影響範囲が異なるため `production` / `development` の 2 群に分け、区別を持たない `github-actions` は 1 群にまとめる
 - グループ化しても Dependabot PR が CI の検証対象外である点は変わらない。マージ前の lint / test / build は取り込む側が実行する（判定手順の正本は [docs/ai/rules/ci-run.md](ai/rules/ci-run.md)）
 - **`NPM_PIN`（値の管理は次節「外部参照の pin（Action / container image / 実行時取得 CLI）」を参照）と semgrep container image（`container.image` の tag+digest）は Dependabot の監視対象外**（`run:` 行・`container:` は追従しない）。定期的な棚卸し手順は現時点で未整備（週次 `weekly-maintenance` 相当の workflow は `docs/planning/ci-split-design.md` で提案止まり・未実装）。棚卸し候補は issue 候補として `docs/planning/issue-candidates.md` に記録済み。
@@ -112,7 +113,7 @@ public 化前の secret・非公開情報（小説本文・設計カード・AI 
 
 - **third-party action は full-length commit SHA pin 必須**（例: `gitleaks/gitleaks-action`）。
 - 公式 action（`actions/checkout`, `actions/setup-node`）も SHA pin する。
-- `uses:` 末尾にコメントで元のタグ/バージョンを残す。更新は Dependabot または手動で SHA を差し替える。
+- `uses:` 末尾にコメントで元のタグ/バージョンを残す。更新は control repo の Dependabot または手動で SHA を差し替える。
 - `container: image:` で参照するコンテナイメージ（例: `semgrep/semgrep`）も tag＋digest で pin する（`image:<tag>@sha256:<digest>`。tag は版の自己記述と tag 剥離後の復旧手掛かり、digest が改竄検証を担う）。`latest` 等のタグ単独参照は禁止。Dependabot 対象外のため更新は手動（tag と digest を同時に差し替える）。
 - tag と digest の一致は機械検証されない（更新時に registry で照合する。検査器は未導入＝[verification-gates.md](ai/rules/verification-gates.md)の寄せ先欠落）。
 - job 内で `npm install -g npm@<range>` のようにグローバル npm を実行時取得する場合も exact version で pin する。**値の正本は workflow ごとに1箇所の env（`<TOOL>_PIN`。npm は ci.yml の `NPM_PIN`）に集約し、job/step env で上書きしない**。各 step は `:?` ガード付きで参照する（`npm@11` のような直書きは禁止）。Dependabot は `run:` 行/`env:` を追従しないため更新は手動。

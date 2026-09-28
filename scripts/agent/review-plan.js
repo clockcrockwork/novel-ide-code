@@ -41,7 +41,18 @@ import {
   DESIGN_ADDON_ANGLES,
   ANGLE_TOKENS,
   CONDITIONAL_ANGLE_TOKENS,
+  KNOWN_SIDECARS,
+  deriveEscalatedAngles,
+  deriveMemoryConditional,
+  AUTHORITY_RECEIPT_LABEL,
+  AUTHORITY_RECEIPT_VERSION,
+  formatAngleList,
 } from './review-angle-tokens.js';
+// deriveEscalatedAngles / deriveMemoryConditional は shadow-routing.js（`deriveShadowEscalatedAngles`
+// / `deriveShadowMemoryConditional` として）と共有する唯一の実装（review-angle-tokens.js が正本。
+// 減算レビュー所見: 循環 import を避けるための独立実装は不要だった）。呼び出し側の互換のため
+// ここから re-export する。
+export { deriveEscalatedAngles, deriveMemoryConditional };
 import {
   ANGLE_TRIGGERS,
   CHANGE_SIGNALS,
@@ -212,11 +223,20 @@ export function loadState(cwd = process.cwd()) {
   // 「完了記録が無い」と同じ値を返し、fail-closed ではなく直前 hop 判定へ**降格**する
   const RECORD_FIELDS = {
     runs: { seq: isValidSeq, snapshotId: (v) => typeof v === 'string' && v !== '' },
-    escalations: { seq: isValidSeq },
+    // `angles` は Array.isArray でだけ検証する（要素の中身は deriveEscalatedAngles /
+    // widenEffectiveTier 側の閉じた語彙検証に委ねる）。ここを検証しないと、部分的に破損・
+    // 手動復旧された state.json で `angles` が配列でない manual-escalation 記録を loadState が
+    // 受理してしまい、`deriveEscalatedAngles` の `!Array.isArray(e.angles) continue` が
+    // fail-loud にせず黙って記録全体を読み飛ばす。authority mode は legacy の
+    // `state.addedAngles`（widenEffectiveTier が無差別に更新する側）を参照しないため、
+    // この silent drop がそのまま「エスカレーションした系統の義務が消える」に直結する
+    // （外部レビュー Codex 指摘）
+    escalations: { seq: isValidSeq, angles: (v) => Array.isArray(v) },
   };
   const REQUIREMENT = {
     seq: 'seq は 0 以上の安全な整数である必要があります',
     snapshotId: 'snapshotId は非空の文字列である必要があります',
+    angles: 'angles は配列である必要があります',
   };
   for (const [key, fields] of Object.entries(RECORD_FIELDS)) {
     for (const rec of parsed[key] ?? []) {
@@ -268,8 +288,9 @@ export function computeInitialTier(files) {
   // だった場合に Tier が「なし」/Docs 側へ落ちるのを防ぐ。review-snapshot.js の
   // classifyFile と同じロジックのため classify-changes.js の expandRenames へ統合済み。
   // #446 round4 観点別レビュー 減算#4）
-  const { codeChanged, depOnly, designDocsChanged, recordDocsChanged, docsChanged } =
-    classify(expandRenames(files));
+  const { codeChanged, depOnly, designDocsChanged, recordDocsChanged, docsChanged } = classify(
+    expandRenames(files),
+  );
 
   // depOnly は classify() 側で「変更されたコードファイルが全て既知 npm プロジェクト直下の
   // manifest/lockfile か」に限定済み（isKnownDepManifestPath）。`!docsChanged` は、docs/ 配下に
@@ -721,6 +742,133 @@ export function applyBudget(sel, state, angle, { snapshotId = null } = {}) {
 export const AUTO_EXPLORATION_BUDGET = 1;
 
 // ---------------------------------------------------------------------------
+// authority routing（Phase 5 §15.4 authority switch）
+// ---------------------------------------------------------------------------
+
+// shadow-routing.js が書く成果物ファイル名（同ファイルの SHADOW_FILE と同じ値）。
+// **shadow-routing.js からは import しない** — shadow-routing.js は既に review-plan.js の
+// loadState 等を import しており、逆方向の import は循環 import（review-plan.js →
+// shadow-routing.js → review-plan.js）になる。値のドリフトは
+// tests/reviewPlan.test.js のクロス一貫性テストが検出する。
+export const ROUTING_ASSESSMENT_FILE = 'shadow-routing.json';
+
+// authority routing が現在の snapshot へ適用できない理由の閉じた語彙。
+// Phase 5 plan §14 Q が名指す4分類（missing / invalid / stale / error）と一致させる。
+export const ROUTING_FALLBACK_REASONS = ['missing', 'invalid', 'stale', 'error'];
+
+/**
+ * 現在の snapshot に対して authority routing を解決する。**buildPlan からは切り離した
+ * I/O 境界** — buildPlan は resolveChangedSince と同じく、ここが返した結果を受け取るだけの
+ * 純粋関数のまま保つ（`routing` 未指定は fallback 側の安全な既定値として扱う。下記 buildPlan）。
+ *
+ * **state.json の構造不正（loadState の fail-loud）はここでは扱わない。** buildPlan の
+ * 呼び出し前に loadState が既に例外を投げているため、ここで catch すべきは
+ * shadow-routing.json 自体の読み取り・parse・鮮度検証だけに限定する（広すぎる try/catch で
+ * state 破損の意図的な fail-loud を握りつぶさない。risk-modeling 調査で事前検出）。
+ *
+ * 契約（正本: review-system-phase5-plan.md §3.5-7,8,9・§14 Q）:
+ * - ファイル不在・読み取り不能・不正 JSON・形式不正・snapshotId 不一致（stale）・
+ *   `valid !== true`（shadow 自身が invalid と判定済み）のいずれでも fallback を返す。
+ *   空集合・縮小集合へは絶対に倒さない（呼び出し側の buildPlan が legacyReviewContract を
+ *   current snapshot へ適用して conservative な review units を再導出する）。
+ * - `selectedAngles` / `selectedSidecars` は ANGLE_TOKENS / KNOWN_SIDECARS に無い値・非文字列を
+ *   1件でも含む場合、**assessment 全体を invalid として fallback へ倒す**（黙って該当要素だけを
+ *   除去して縮小した集合を authority採用しない。敵対的レビュー所見 F2/F3: 従来は「拒否する」と
+ *   docstring に書きながら実装は「除去して続行」になっており、閉じた語彙外の machine ID・
+ *   sidecar 文字列が縮小・注入経路として悪用/誤動作しうる状態だった）。
+ */
+export function resolveRoutingAuthority({ snapshotDir, snapshotId }) {
+  const fallback = (reason, detail) => {
+    // ROUTING_FALLBACK_REASONS を唯一の正本にする — reason の綴り違いをここで即 fail-loud に
+    // する（呼び出し側・review-metrics.js の集計側で未知の reason 文字列が黙って通るより早い段階
+    // で検出する。減算レビュー所見: 閉じた語彙の export を実際に検証へ使わないと、値を変えたとき
+    // どちらか一方だけが追従しないまま乖離する）
+    if (!ROUTING_FALLBACK_REASONS.includes(reason)) {
+      throw new Error(`resolveRoutingAuthority: 未知の fallback reason です: ${reason}`);
+    }
+    return { authority: 'fallback', reason, detail };
+  };
+  // snapshotDir 不明（snapshot 台帳を経由しない軽量な呼び出し・fixture 由来の snap 等）では
+  // shadow-routing.json の所在を特定できない。存在確認を試みずに fallback へ倒す
+  // （fail-loud にする理由が無い — 「assessment を探せない」は「無い」と同じ扱いでよい）
+  if (typeof snapshotDir !== 'string' || snapshotDir === '') {
+    return fallback('missing', 'snapshot ディレクトリが不明です（shadow-routing.json を探せない）');
+  }
+  const path = join(snapshotDir, ROUTING_ASSESSMENT_FILE);
+  if (!existsSync(path)) {
+    return fallback('missing', `${ROUTING_ASSESSMENT_FILE} が存在しません（shadow assessment 未実施）`);
+  }
+  let raw;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    return fallback('error', `${ROUTING_ASSESSMENT_FILE} を読み取れません（${err.message}）`);
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return fallback('invalid', `${ROUTING_ASSESSMENT_FILE} が不正な JSON です（${err.message}）`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return fallback('invalid', `${ROUTING_ASSESSMENT_FILE} の形式が不正です（オブジェクトではない）`);
+  }
+  if (parsed.snapshotId !== snapshotId) {
+    return fallback(
+      'stale',
+      `${ROUTING_ASSESSMENT_FILE} の snapshotId が現在の snapshot と一致しません` +
+        `（記録: ${JSON.stringify(parsed.snapshotId ?? null)} / 現在: ${snapshotId}）`,
+    );
+  }
+  if (parsed.valid !== true) {
+    return fallback(
+      'invalid',
+      `shadow assessment が invalid です（shadowFailure: ${parsed.shadowFailure?.reason ?? '理由不明'}）`,
+    );
+  }
+  // `valid: true` かつ `shadowFailure` が非 null は矛盾した状態（shadow-routing.js は正常に
+  // valid を書く場合 shadowFailure を必ず null にする）。壊れた・改変された成果物の兆候として
+  // 信頼せず fallback へ倒す（敵対的レビュー所見 R4）
+  if (parsed.shadowFailure != null) {
+    return fallback(
+      'invalid',
+      `${ROUTING_ASSESSMENT_FILE} が矛盾した状態です（valid: true だが shadowFailure が非 null）`,
+    );
+  }
+  const selection = parsed.selection;
+  if (
+    selection === null ||
+    typeof selection !== 'object' ||
+    Array.isArray(selection) ||
+    !Array.isArray(selection.selectedAngles)
+  ) {
+    return fallback('invalid', `${ROUTING_ASSESSMENT_FILE} の selection.selectedAngles が不正です`);
+  }
+  const isKnownAngle = (a) => typeof a === 'string' && Object.hasOwn(ANGLE_TOKENS, a);
+  if (!selection.selectedAngles.every(isKnownAngle)) {
+    return fallback(
+      'invalid',
+      `${ROUTING_ASSESSMENT_FILE} の selection.selectedAngles に ANGLE_TOKENS に無い値・非文字列が` +
+        `含まれています（${JSON.stringify(selection.selectedAngles.filter((a) => !isKnownAngle(a)))}）`,
+    );
+  }
+  if (
+    selection.selectedSidecars !== undefined &&
+    (!Array.isArray(selection.selectedSidecars) ||
+      !selection.selectedSidecars.every((s) => KNOWN_SIDECARS.includes(s)))
+  ) {
+    return fallback(
+      'invalid',
+      `${ROUTING_ASSESSMENT_FILE} の selection.selectedSidecars に KNOWN_SIDECARS に無い値が` +
+        `含まれています`,
+    );
+  }
+  const selectedAngles = selection.selectedAngles;
+  const selectedSidecars = Array.isArray(selection.selectedSidecars) ? selection.selectedSidecars : [];
+  return { authority: 'authority', selectedAngles, selectedSidecars };
+}
+
+// ---------------------------------------------------------------------------
 // 計画生成
 // ---------------------------------------------------------------------------
 
@@ -734,6 +882,11 @@ export const AUTO_EXPLORATION_BUDGET = 1;
 // machine へ無理に記録させない）。正本:
 // docs/agent-workflows/review-angles/README.md「review budget（自動探索の上限）」。
 export const MACHINE_RECORDABLE_MODES = new Set(['diff-explore', 'full-rescan']);
+
+// 起動記録・review-metrics.js の計測記録が共通で使う status の閉じた語彙。両者が別々に
+// リテラルを持つとどちらか一方だけ status を追加/変更したときに受理集合がずれる
+// （敵対的・減算レビュー所見）。
+export const RUN_STATUS_VALUES = ['complete', 'incomplete', 'error'];
 
 // 起動順の段階（「どの段階を今 round で起動するか」の状態機械）。
 // 正本: review-angles/README.md「レビューループ手順」3・4・7・8
@@ -768,6 +921,7 @@ export function buildPlan({
   changedInFix,
   memoryHits = 0,
   resolveChangedSince = null,
+  routing = null,
 }) {
   const initial = state.initialTier
     ? {
@@ -776,9 +930,91 @@ export function buildPlan({
         reasons: state.initialTierReasons ?? ['初期 Tier（確定済み）'],
       }
     : computeInitialTier(changedFiles);
-  const effectiveAngles = new Set([...initial.angles, ...state.addedAngles]);
-  const effectiveTier = state.effectiveTier ?? tierNameForAngles([...effectiveAngles]);
-  for (const a of anglesForTierName(effectiveTier)) effectiveAngles.add(a);
+
+  // legacyReviewContract（凍結した pre-switch selection policy）を current snapshot /
+  // current state.addedAngles へ適用した angle 集合。Tier 名の表示・compat・authority
+  // fallback の3用途すべての基盤になる（正本: review-system-phase5-plan.md §3.5-9, §15.4）。
+  // **凍結されているのは policy（legacy Tier マッピングという規則）であって、この値自体
+  // ではない** — current changedFiles / current state.addedAngles が変われば legacyAngles も
+  // 変わる。switch 時点の実値を固定するのは §3.5-9 が明示的に禁止する誤り。
+  const legacyAngles = new Set([...initial.angles, ...state.addedAngles]);
+  const effectiveTier = state.effectiveTier ?? tierNameForAngles([...legacyAngles]);
+  for (const a of anglesForTierName(effectiveTier)) legacyAngles.add(a);
+
+  // authority routing: valid な routing assessment（shadow-routing.json 経由。
+  // resolveRoutingAuthority が解決済みの結果を受け取るだけで、ここでは I/O をしない —
+  // resolveChangedSince と同じ「呼び出し側が I/O を担い、buildPlan は純粋関数のまま保つ」
+  // 設計）があれば、semantic selectedAngles を通常 angle の適用集合の正本へ切り替える。
+  // missing/invalid/stale/error は空集合・縮小集合へ倒さず、legacyAngles
+  // （legacyReviewContract を current snapshot へ適用した結果）を conservative fallback として
+  // 使う（§3.5-8, §14 Q, §15.4）。`escalatedAngles` は authority/fallback のどちらでも
+  // `state.escalations` から独立に導出する（shadow-routing.json の記録は escalate 実行前の
+  // 時点で stale になりうるため信頼しない）。
+  const escalatedAngles = deriveEscalatedAngles(state);
+  let routingResult = routing ?? {
+    authority: 'fallback',
+    reason: 'missing',
+    detail: 'routing 情報が buildPlan へ渡されていません',
+  };
+  // 空集合フロア（敵対的レビュー所見 F1・blocker。実行確認済み: 高リスク diff ＋ 全 dimension
+  // false の assessment で converged:true・レビュアー0本に到達した）。§4.2 routing table で
+  // selectedAngles（escalatedAngles を含む）が正当に空集合になりうるのは
+  // `docsOnly=true ∧ semanticDocs=false` の1行だけである。この docsOnly は shadow-routing.js の
+  // machineFacts.docsOnly（`!codeChanged`）と同じ classify() 判定でなければならない ——
+  // `computeInitialTier` の `initial.base === null` を代理に使うと、depOnly（依存 manifest の
+  // みの変更）＋ docs 混在で `codeChanged=true` なのに `base: null` になるケース（package.json /
+  // package-lock.json ＋ 設計文書、等）で floor が不発になる（敵対的レビュー2周目 F-A1・high。
+  // レビュアー0本・converged:true に到達することを実行確認済み）。加えて `initial.base` は
+  // `state.initialTier` が cache 済みの分岐（`computeInitialTier` を経由しない）には存在せず
+  // `undefined` になるため、`!== null` 判定が2周目以降つねに真になり docs のみ PR の正当な
+  // 空集合まで fallback へ倒す誤発火もあった（同 F-A2）。`changedFiles` は cache の有無に
+  // かかわらず毎回渡されるため、ここで独立に classify() を呼び直せば両方を同時に解消できる
+  // （追加の I/O ではなく同じ入力の再計算のため buildPlan の純粋性は変わらない）。
+  const { codeChanged: diffCodeChanged } = classify(expandRenames(changedFiles));
+  if (routingResult.authority === 'authority') {
+    const rawAuthorityAngles = new Set([...routingResult.selectedAngles, ...escalatedAngles]);
+    if (rawAuthorityAngles.size === 0 && diffCodeChanged) {
+      routingResult = {
+        authority: 'fallback',
+        reason: 'invalid',
+        detail:
+          'semantic selectedAngles（escalatedAngles 込み）が空集合ですが、diff はコード変更を' +
+          '伴います（docsOnly ではない）。空集合が正当なのは §4.2 の docsOnly∧semanticDocs=false' +
+          '行だけのため、信頼できない縮退として legacyReviewContract fallback へ倒します',
+      };
+    }
+  }
+  const routingAuthority = routingResult.authority === 'authority' ? 'authority' : 'fallback';
+  // 生の semantic selection（escalation 併合前）。`effectiveAngles`（下記）は
+  // `selectedAngles ∪ escalatedAngles` の和集合で、router が選ばなかった角度も escalation 経由で
+  // 含みうる。表示側（formatPlan）が和集合をそのまま「selectedAngles」と誤ラベル付けすると、
+  // manual escalation で追加された角度まで router 自身が選んだように見え、routing-miss の
+  // 振り返りで provenance を取り違える（外部レビュー Codex 指摘 P2）。`effectiveAngles` から
+  // `escalatedAngles` を単純に差し引いても復元できない（router が同じ角度を独立に選んでいた
+  // 場合、差集合はその角度を誤って落とす）ため、生の値を別フィールドとして保持する。
+  const semanticSelectedAngles =
+    routingAuthority === 'authority' ? [...routingResult.selectedAngles] : [];
+  const effectiveAngles =
+    routingAuthority === 'authority'
+      ? new Set([...routingResult.selectedAngles, ...escalatedAngles])
+      : new Set(legacyAngles);
+  const selectedSidecars = routingAuthority === 'authority' ? routingResult.selectedSidecars : [];
+
+  // 未解決（最新 run が incomplete/error）の角度は、routing の再計算で選択から外れても必須集合
+  // から落とさない。legacy mode は widenEffectiveTier が加算のみ（Tier 名・必須系統集合とも
+  // 縮小しない）でこれを自動的に満たすが、authority mode の effectiveAngles は毎回
+  // shadow-routing.json から生で再構築されるため、同一 snapshot に対する re-assessment が
+  // selectedAngles を狭めると、直前の incomplete run が entries/blockers の対象から消えて
+  // converged:true が偽装されうる（外部レビュー Codex 指摘: testquality が incomplete のまま
+  // 再 assessment で選択から外れるケースを実行確認）。`latestRunOf` は seq 最大（最新）の記録
+  // だけを見るため、後続の起動が complete すれば自然に解消し恒久的な足止めにはならない。
+  // memory は CONDITIONAL_ANGLE_TOKENS 側（`deriveMemoryConditional` が別途管理）のため対象外。
+  const anglesWithRunHistory = new Set(
+    state.runs.map((r) => r.angle).filter((a) => Object.hasOwn(ANGLE_TOKENS, a)),
+  );
+  for (const angle of anglesWithRunHistory) {
+    if (latestRunOf(state, angle)?.status !== 'complete') effectiveAngles.add(angle);
+  }
 
   const signals = deriveSignals(manifest, changedInFix);
   const fixDiffEmpty = changedInFix.length === 0;
@@ -852,8 +1088,12 @@ export function buildPlan({
   //   関係する変更がない新 snapshot では再起動しない）
   // 清掃・最終独立レビューより前に片付けるべき通常のレビュー系統である点は他と同じなので、
   // 本体段階に属させる。
-  // loadState が boolean を保証するため型強制はしない（`Boolean("false")` は true になる）
-  const memoryRequired = memoryHits > 0 || state.memoryRequired === true;
+  // loadState が boolean を保証するため型強制はしない（`Boolean("false")` は true になる）。
+  // **`state.memoryRequired`/`memoryHits` だけでなく `escalate --angles memory` も見る**
+  // （deriveMemoryConditional。spec レビュー所見: authority mode の effectiveAngles は
+  // `state.addedAngles` を参照しないため、hit 無しで memory を明示 escalate した attempt では
+  // これを見ないと memory レビュー義務が authority mode でだけ消える）。
+  const memoryRequired = deriveMemoryConditional(state, memoryHits);
   const bodyAngles = [...effectiveAngles].filter((a) => a !== 'subtractive' && a !== 'cleanup');
   const stageAngles = {
     subtractive: effectiveAngles.has('subtractive') ? ['subtractive'] : [],
@@ -1047,12 +1287,33 @@ export function buildPlan({
   return {
     version: 1,
     snapshotId: manifest.snapshotId,
+    // #645: authority receipt を PR head へ束縛するための識別子。snapshot 取得時の
+    // `git rev-parse HEAD`（review-snapshot.js の manifest.headSha）をそのまま運ぶ。
+    // manifest に無い（テスト fixture 等）場合は null とし、receipt 側は「束縛不能」として扱う。
+    headSha: manifest.headSha ?? null,
     initialTier: initial.tier,
     initialTierReasons: initial.reasons,
     effectiveTier,
     effectiveAngles: [...effectiveAngles],
     addedAngles: state.addedAngles,
     escalations: state.escalations,
+    // Phase 5 §15.4 authority switch の観測用フィールド。`routingAuthority` は review-metrics.js
+    // の record-routing --authority がどちらを指定すべきかを人間・orchestrator が読み取れるように
+    // する（正本にするのは shadow-routing.json ではなく、実際に selectedAngles を採用したかどうか
+    // というこの plan 自身の決定）。fallback 時は理由（missing/invalid/stale/error）と詳細を残す
+    // — 空集合・縮小集合へ倒したのではなく legacyReviewContract を適用したことを示す。
+    routingAuthority,
+    ...(routingAuthority === 'fallback'
+      ? { routingFallbackReason: routingResult.reason, routingFallbackDetail: routingResult.detail }
+      : {}),
+    semanticSelectedAngles,
+    escalatedAngles,
+    // memory の conditional kind を保つ観測用フィールド（#645: authority receipt の
+    // `conditional` フィールドが正本にする値。`entries` 内の `angle==='memory'` 行と同じ事実の
+    // 別表現だが、receipt 生成は entries を歩いて復元するのではなくこの明示フィールドを使う）。
+    conditionalAngles: memoryRequired ? ['memory'] : [],
+    selectedSidecars,
+    legacyAngles: [...legacyAngles],
     signals,
     fixDiffEmpty,
     stage: currentStage,
@@ -1098,6 +1359,15 @@ function nextSeq(state) {
   return max + 1;
 }
 
+// ANGLE_TOKENS に登録済み（＝ escalate --angles / semantic routing の対象になりうる）だが、
+// どの TIER_ANGLES にも属さない通常 angle（現時点では testquality のみ。Phase 5 §15.4
+// authority switch で「canonical registry 登録」と「legacy Tier 必須系統への追加」を明示的に
+// 独立させたことの直接の帰結）。ANGLE_TOKENS への将来の追加が自動的にここへ反映されるよう、
+// リテラルの角度名一覧ではなく TIER_ANGLES との差集合として導出する。
+const NON_TIER_NORMAL_ANGLES = Object.keys(ANGLE_TOKENS).filter(
+  (angle) => !Object.values(TIER_ANGLES).some((angles) => angles.includes(angle)),
+);
+
 /**
  * 実効 Tier を「縮小させず常に超集合を採る」形で広げる共通コア。
  * escalateAngles（起動側の判断）と reclassifyTier（Tier の毎回再検証）の両方から呼ばれる。
@@ -1116,11 +1386,16 @@ function widenEffectiveTier(state, { targets, reasons = [], kind, preferBase = n
   // tierNameForAngles がどの宣言名でも被覆できず、フォールバックの最強 Tier
   // （Full＋設計文書）へ倒れる。記憶適合だけを再確認したい Light の PR が全7系統と重い予算を
   // 要求されることになるので、条件起動系統は addedAngles と再起動義務にのみ反映する
-  // （外部レビュー Codex 指摘）
+  // （外部レビュー Codex 指摘）。
+  // **同じ理由で NON_TIER_NORMAL_ANGLES（testquality 等）も外す** — こちらは通常 angle だが
+  // legacy Tier 表には元々属さないため、`escalate --angles testquality` を実行すると同じく
+  // covering Tier が1つも見つからず Full＋設計文書 へ吹き飛ぶ（PR-580 #3 で memory に対して
+  // 実際に発生した回帰と同型。risk-modeling 調査で事前検出）。
   const prevTier = state.effectiveTier ?? state.initialTier;
   const current = new Set([...anglesForTierName(prevTier), ...state.addedAngles]);
   for (const a of targets) current.add(a);
   for (const a of Object.keys(CONDITIONAL_ANGLE_TOKENS)) current.delete(a);
+  for (const a of NON_TIER_NORMAL_ANGLES) current.delete(a);
   // 基礎 Tier のヒントを渡す: Light＋設計文書 と Full は必須系統が同一のため、
   // ヒント無しでは Full の PR が Light＋設計文書 へ落ちて基礎 Tier が縮小する。
   // 呼び出し側が最新の基礎 Tier（例: reclassifyTier が computeInitialTier で再計算した
@@ -1283,8 +1558,8 @@ function normalizeRun(run) {
         '`node scripts/agent/review-metrics.js record` へ記録してください',
     );
   }
-  if (!['complete', 'incomplete', 'error'].includes(rec.status)) {
-    throw new Error(`未知の status です: ${rec.status}（complete / incomplete / error）`);
+  if (!RUN_STATUS_VALUES.includes(rec.status)) {
+    throw new Error(`未知の status です: ${rec.status}（${RUN_STATUS_VALUES.join(' / ')}）`);
   }
   return rec;
 }
@@ -1344,14 +1619,21 @@ function loadRecordRunSnapshot(cwd, snapshotId) {
  * 広がるべき snapshot では両者の計画が食い違うので、**手順どおり先に `npm run review:plan` を
  * 実行すること**（README「レビューループ手順」2）。plan を経ていれば widen 後の state が
  * 永続化されており、ここでの再計算も同じ計画になる。
+ *
+ * **`routing` は呼び出し側が解決して渡す**（`resolveChangedSince` と同じ I/O 注入パターン）。
+ * 省略すると `buildPlan` は fallback（legacyReviewContract）として計画を再計算する — authority
+ * mode で valid な assessment があり `plan` 側が semantic selectedAngles を採用していても、ここへ
+ * `routing` を渡し忘れると再計算が legacy 集合に基づく別の計画になり、authority が実際に選んだ
+ * 系統の記録が「計画が要求していない起動」として拒否される（外部レビュー Codex 指摘 P1）。
  */
-export function plannedLaunches(state, snap, { resolveChangedSince = null } = {}) {
+export function plannedLaunches(state, snap, { resolveChangedSince = null, routing = null } = {}) {
   const plan = buildPlan({
     state,
     manifest: snap.manifest,
     changedFiles: snap.changedFiles.files,
     changedInFix: snap.changedFiles.changedInFix,
     resolveChangedSince,
+    routing,
   });
   return plan.entries
     .filter((e) => e.run)
@@ -1377,11 +1659,21 @@ export function plannedLaunches(state, snap, { resolveChangedSince = null } = {}
  * no-op として成立する必要があるため（下記）。
  *
  * `resolveFreshness` は**任意**で、鮮度と計画が同じ snapshot を指すことは呼び出し側の責任。
+ *
+ * `resolveRouting` も**任意**（`plannedLaunches` への注入。省略時は fallback として再計算する。
+ * §15.4 authority switch: CLI ハンドラは `planCommand` と同じ `resolveRoutingAuthority` を渡すこと
+ * — 省略すると authority mode が実際に選択した系統の記録が「計画が要求していない起動」として
+ * 拒否される。外部レビュー Codex 指摘 P1）。
  */
 export function recordRunCommand(
   state,
   runArgs,
-  { resolveSnapshot = null, resolveFreshness = null, resolveChangedSince = null } = {},
+  {
+    resolveSnapshot = null,
+    resolveFreshness = null,
+    resolveChangedSince = null,
+    resolveRouting = null,
+  } = {},
 ) {
   const rec = normalizeRun(runArgs);
   if (!resolveSnapshot) {
@@ -1408,7 +1700,8 @@ export function recordRunCommand(
     );
   }
 
-  const planned = plannedLaunches(state, snapshot, { resolveChangedSince });
+  const routing = resolveRouting ? resolveRouting() : null;
+  const planned = plannedLaunches(state, snapshot, { resolveChangedSince, routing });
   // **計画がこの観点の起動をいま要求しているか。** 要求しているなら、この記録は
   // **新しい invocation の結果**である。要求していないなら、過去の invocation についての
   // 再記録（重複）か矛盾した二重報告のいずれかでしかない。
@@ -1511,6 +1804,9 @@ export function planCommand(state, snap, { memoryHits = 0, resolveChangedSince =
   // 義務の解消は「記憶適合が最終段階まで収束すること」であって、ヒット件数の消失ではない
   const requestedMemoryHits = Number.isInteger(memoryHits) ? memoryHits : 0;
   if (requestedMemoryHits > 0) state.memoryRequired = true;
+  // authority routing の I/O は呼び出し側（ここ）が担い、buildPlan は結果を受け取るだけの
+  // 純粋関数のまま保つ（resolveChangedSince と同じ設計）。
+  const routing = resolveRoutingAuthority({ snapshotDir: snap.dir, snapshotId: snap.snapshotId });
   const plan = buildPlan({
     state,
     manifest: snap.manifest,
@@ -1518,6 +1814,7 @@ export function planCommand(state, snap, { memoryHits = 0, resolveChangedSince =
     changedInFix: snap.changedFiles.changedInFix,
     memoryHits: requestedMemoryHits,
     resolveChangedSince,
+    routing,
   });
   state.effectiveTier = plan.effectiveTier;
   return plan;
@@ -1561,7 +1858,10 @@ export function parseArgs(argv) {
   return out;
 }
 
-function requireSnapshot(cwd) {
+// export するのは、shadow-routing.js 等の他 CLI が「snapshot が無ければこの案内で
+// fail-loud する」を再実装せず共有できるようにするため（減算・コード品質・最終独立レビュー
+// が独立に指摘した重複）。挙動はこれまでと変えない。
+export function requireSnapshot(cwd) {
   const snap = latestSnapshot(cwd);
   if (!snap) {
     throw new Error(
@@ -1605,6 +1905,17 @@ function main() {
       // 旧 plan が書いた semantic finding の成果物が残っていれば同時に片付ける
       discardLegacyFindingArtifacts(cwd);
       process.stdout.write(formatPlan(plan, snap.dir));
+      // authority mode の時だけ receipt 行を案内する（#645）。fallback/legacy 運用の PR 本文に
+      // 常時この行を混ぜても Artifacts Gate 側の判定には影響しない（fallback receipt は
+      // 従来どおり legacy Tier 必須系統を維持する）が、無関係な PR 本文にまで機械可読行を
+      // 増やす必要はないため、authority mode のときだけ「PR 本文へ貼る行」として案内する。
+      if (plan.routingAuthority === 'authority') {
+        process.stdout.write(
+          '\nauthority routing が有効です。PR 本文の「レビューループ記録」セクションに次の行を' +
+            '貼り付けてください（Artifacts Gate が必須系統の判定に使います）:\n\n' +
+            `${formatAuthorityReceipt(plan)}\n`,
+        );
+      }
       // 成果物を書き出した**後**に fail-loud する（診断材料を失わせない）。黙って「収束: いいえ」
       // を出し続けると、止まっていること自体が誰にも見えない
       if (!plan.converged && plan.nextActions.length === 0) {
@@ -1686,6 +1997,10 @@ function main() {
           resolveSnapshot,
           resolveFreshness: () => snapshotFreshness(resolveSnapshot(), cwd),
           resolveChangedSince: (from, to) => changedFilesBetween(cwd, from, to),
+          resolveRouting: () => {
+            const snap = resolveSnapshot();
+            return resolveRoutingAuthority({ snapshotDir: snap.dir, snapshotId: snap.snapshotId });
+          },
         },
       );
       saveState(state, cwd);
@@ -1713,12 +2028,50 @@ function main() {
   }
 }
 
+/**
+ * authority routing execution receipt（#645）の PR 本文貼り付け用1行を生成する。
+ *
+ * **この関数が receipt 生成の唯一の正本**（review-system-phase5-plan.md の要求「receipt を
+ * 生成する正本関数は可能な限り review-plan.js 側に置く」）。値はすべて `buildPlan()` が
+ * 既に確定した plan フィールドをそのまま転記するだけで、ここで selectedAngles・escalation
+ * overlay・incomplete/error anti-skip 等を再計算しない（`check-artifacts.js` 側も同様に
+ * この行を検証するだけの consumer に留める。正本は本関数と `buildPlan()` のみ）。
+ *
+ * `effective`（`plan.effectiveAngles`）が Artifacts Gate の必須系統の正になる値。
+ * `selected`/`escalated`/`conditional`/`sidecars` は kind を失わないための provenance で、
+ * Gate 側の pass/fail 判定そのものには使わない（ただし閉じた語彙・内部整合性は検証される）。
+ *
+ * `plan.headSha` が無い（テスト fixture 等で snapshot manifest に headSha が無い）場合、
+ * 空文字列を埋める — check-artifacts 側は 40桁 hex でない値を即座に malformed として扱うため、
+ * 「束縛不能な receipt」を安全側（fallback 相当）に倒せる。
+ */
+export function formatAuthorityReceipt(plan) {
+  return (
+    `${AUTHORITY_RECEIPT_LABEL}: v${AUTHORITY_RECEIPT_VERSION} ` +
+    `head=${plan.headSha ?? ''} ` +
+    `authority=${plan.routingAuthority} ` +
+    `selected=${formatAngleList(plan.semanticSelectedAngles)} ` +
+    `escalated=${formatAngleList(plan.escalatedAngles)} ` +
+    `conditional=${formatAngleList(plan.conditionalAngles)} ` +
+    `effective=${formatAngleList(plan.effectiveAngles)} ` +
+    `sidecars=${formatAngleList(plan.selectedSidecars)}`
+  );
+}
+
 export function formatPlan(plan, dir) {
   const lines = [];
   lines.push(`snapshot: ${plan.snapshotId}`);
   lines.push(`初期 Tier: ${plan.initialTier}（${plan.initialTierReasons.join('／')}）`);
   lines.push(
     `実効 Tier: ${plan.effectiveTier}${plan.addedAngles.length > 0 ? `（加算: ${plan.addedAngles.join(' / ')}）` : ''}`,
+  );
+  // Tier は authority routing の有無に関わらず常に legacyReviewContract 基準で表示する
+  // （表示互換・fallback 用途。§15.6）。実際に何が通常 angle の適用集合を決めたかはここで
+  // 別行として明示する — 読み手が「Tier が必須系統を決めている」と誤読しないようにする
+  lines.push(
+    plan.routingAuthority === 'authority'
+      ? `routing authority: semantic routing（selectedAngles: ${plan.semanticSelectedAngles.join(' / ') || '(なし)'}${plan.escalatedAngles.length > 0 ? ` ／ escalated: ${plan.escalatedAngles.join(' / ')}` : ''}${plan.selectedSidecars.length > 0 ? ` ／ sidecars: ${plan.selectedSidecars.join(' / ')}` : ''}）`
+      : `routing authority: legacyReviewContract fallback（理由: ${plan.routingFallbackReason} — ${plan.routingFallbackDetail}）`,
   );
   // このシグナルは**直前 snapshot からの修正差分**のもの。系統ごとの baseline が直前より
   // 古い場合、その系統は累積差分で判定されるので値が食い違う。どちらが正かを読み手が
