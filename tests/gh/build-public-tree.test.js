@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync, symlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -33,6 +34,35 @@ function tmpDirs() {
   const outParent = mkdtempSync(join(tmpdir(), 'out-'));
   const out = join(outParent, 'public');
   return { src, out, cleanup: () => { rmSync(src, { recursive: true, force: true }); rmSync(outParent, { recursive: true, force: true }); } };
+}
+
+function gitBlobSha(content) {
+  const buf = Buffer.from(content);
+  return createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
+}
+
+function memoryRecord({
+  id,
+  status = 'accepted',
+  visibility = 'control',
+  title = id,
+  summary = `summary:${id}`,
+  rationale = '',
+  sources = [],
+} = {}) {
+  return JSON.stringify({
+    id,
+    createdAt: '2026-01-01',
+    kind: 'constraint',
+    status,
+    visibility,
+    scope: ['architecture'],
+    title,
+    summary,
+    ...(rationale ? { rationale } : {}),
+    ...(sources.length ? { sources } : {}),
+    author: 'test',
+  });
 }
 
 test('happy path: 通常ファイルを含め control-only を除外、mode を保持する', () => {
@@ -475,25 +505,127 @@ test('denylist 規則: docs/agent-memory/ の想定外配置・`\\`/制御文字
   }
 });
 
-test('denylist 規則: docs/agent-memory/ 配下の非 json（README.md・digest.md）は denylist 既定どおり included・records/ 配下は control-only で excluded（ラウンド3減算 S-2）', () => {
+test('denylist 規則: docs/agent-memory/README.md は included、records/ は control-only で excluded', () => {
+  const { src, out, cleanup } = tmpDirs();
+  try {
+    const id = 'mem-20260101-abcdef';
+    const runGit = mockGit({
+      toplevel: resolve(src),
+      treeStr: tree([
+        ['100644', 'a1', 'src/index.js'],
+        ['100644', 'a2', 'docs/agent-memory/README.md'],
+        ['100644', 'a4', `docs/agent-memory/records/${id}.json`],
+      ]),
+      blobs: { a1: 'code', a2: '# agent-memory', a4: memoryRecord({ id }) },
+    });
+    const r = buildPublicTree({ sourceRepo: src, outDir: out, runGit });
+    assert.equal(r.includedCount, 3);
+    assert.deepEqual(r.excluded, [`docs/agent-memory/records/${id}.json`]);
+    assert.equal(readFileSync(join(out, 'docs/agent-memory/README.md'), 'utf-8'), '# agent-memory');
+    assert.match(
+      readFileSync(join(out, 'docs/agent-memory/digest.md'), 'utf-8'),
+      /（該当なし）/,
+      'public active record が0件でも空 digest を生成する',
+    );
+    assert.equal(existsSync(join(out, `docs/agent-memory/records/${id}.json`)), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('visibility=public かつ active の記憶だけを digest.md に生成し manifest で内容を束縛する', () => {
+  const { src, out, cleanup } = tmpDirs();
+  try {
+    const publicId = 'mem-20260101-aaaaaa';
+    const controlId = 'mem-20260101-bbbbbb';
+    const proposedId = 'mem-20260101-cccccc';
+    const publicRaw = memoryRecord({
+      id: publicId,
+      visibility: 'public',
+      title: 'PUBLIC TITLE',
+      summary: 'PUBLIC SUMMARY',
+      rationale: 'CONTROL-ONLY-RATIONALE',
+      sources: ['docs/planning/private-plan.md'],
+    });
+    const runGit = mockGit({
+      toplevel: resolve(src),
+      treeStr: tree([
+        ['100644', 'a1', 'src/index.js'],
+        ['100644', 'p1', `docs/agent-memory/records/${publicId}.json`],
+        ['100644', 'c1', `docs/agent-memory/records/${controlId}.json`],
+        ['100644', 'p2', `docs/agent-memory/records/${proposedId}.json`],
+      ]),
+      blobs: {
+        a1: 'code',
+        p1: publicRaw,
+        c1: memoryRecord({ id: controlId, visibility: 'control', title: 'CONTROL TITLE' }),
+        p2: memoryRecord({ id: proposedId, status: 'proposed', visibility: 'public', title: 'PROPOSED TITLE' }),
+      },
+    });
+    const r = buildPublicTree({ sourceRepo: src, outDir: out, runGit });
+    const digestPath = join(out, 'docs/agent-memory/digest.md');
+    const digest = readFileSync(digestPath, 'utf-8');
+    assert.match(digest, /PUBLIC TITLE/);
+    assert.match(digest, /PUBLIC SUMMARY/);
+    assert.doesNotMatch(digest, /CONTROL TITLE/);
+    assert.doesNotMatch(digest, /PROPOSED TITLE/);
+    assert.doesNotMatch(digest, /CONTROL-ONLY-RATIONALE/);
+    assert.doesNotMatch(digest, /docs\/planning\/private-plan\.md/);
+    assert.deepEqual(r.included, ['src/index.js', 'docs/agent-memory/digest.md']);
+    assert.equal(r.includedCount, 2);
+    const manifest = JSON.parse(readFileSync(r.manifestPath, 'utf-8'));
+    assert.deepEqual(manifest.included, ['src/index.js', 'docs/agent-memory/digest.md']);
+    assert.equal(manifest.includedShas['docs/agent-memory/digest.md'], gitBlobSha(digest));
+    assert.deepEqual(manifest.excluded, [
+      `docs/agent-memory/records/${publicId}.json`,
+      `docs/agent-memory/records/${controlId}.json`,
+      `docs/agent-memory/records/${proposedId}.json`,
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test('visibility=public の active record が不正なら digest から黙って落とさず fail-closed', () => {
+  const { src, out, cleanup } = tmpDirs();
+  try {
+    const id = 'mem-20260101-dddddd';
+    const invalid = JSON.parse(memoryRecord({ id, visibility: 'public' }));
+    invalid.kind = 'unknown-kind';
+    const runGit = mockGit({
+      toplevel: resolve(src),
+      treeStr: tree([
+        ['100644', 'a1', 'src/index.js'],
+        ['100644', 'p1', `docs/agent-memory/records/${id}.json`],
+      ]),
+      blobs: { a1: 'code', p1: JSON.stringify(invalid) },
+    });
+    assert.throws(
+      () => buildPublicTree({ sourceRepo: src, outDir: out, runGit }),
+      /public agent-memory digest 対象レコードが不正.*未知 kind/s,
+    );
+    assert.equal(existsSync(out), false);
+  } finally {
+    cleanup();
+  }
+});
+
+test('canonical HEAD に tracked digest.md がある場合は生成物との衝突として fail', () => {
   const { src, out, cleanup } = tmpDirs();
   try {
     const runGit = mockGit({
       toplevel: resolve(src),
       treeStr: tree([
         ['100644', 'a1', 'src/index.js'],
-        ['100644', 'a2', 'docs/agent-memory/README.md'],
-        ['100644', 'a3', 'docs/agent-memory/digest.md'],
-        ['100644', 'a4', 'docs/agent-memory/records/mem-20260101-abcdef.json'],
+        ['100644', 'a2', 'docs/agent-memory/digest.md'],
       ]),
-      blobs: { a1: 'code', a2: '# agent-memory', a3: '# digest', a4: '{}' },
+      blobs: { a1: 'code', a2: '# stale digest' },
     });
-    const r = buildPublicTree({ sourceRepo: src, outDir: out, runGit });
-    assert.equal(r.includedCount, 3);
-    assert.deepEqual(r.excluded, ['docs/agent-memory/records/mem-20260101-abcdef.json']);
-    assert.equal(readFileSync(join(out, 'docs/agent-memory/README.md'), 'utf-8'), '# agent-memory');
-    assert.equal(readFileSync(join(out, 'docs/agent-memory/digest.md'), 'utf-8'), '# digest');
-    assert.equal(existsSync(join(out, 'docs/agent-memory/records/mem-20260101-abcdef.json')), false);
+    assert.throws(
+      () => buildPublicTree({ sourceRepo: src, outDir: out, runGit }),
+      /予約済みの生成パス.*digest/,
+    );
+    assert.equal(existsSync(out), false);
   } finally {
     cleanup();
   }

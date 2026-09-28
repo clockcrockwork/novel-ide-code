@@ -820,8 +820,8 @@ function noteIfNoRecords(dir, records) {
   if (records.length > 0) return;
   if (!existsSync(dir)) {
     process.stderr.write(
-      'note: records/ が存在しません（public tree 相当。public repo には記憶レコードを含めません。' +
-        'digest の public 同期は #345 残作業で未提供です。control repo で参照してください）\n',
+      'note: records/ が存在しません（public tree 相当。public repo には正本レコードを含めません。' +
+        '公開可能な active 記憶は docs/agent-memory/digest.md を参照してください）\n',
     );
   } else {
     process.stderr.write(

@@ -16,9 +16,9 @@ import { relative, isAbsolute, sep } from 'node:path';
 // strict secret scan / prose 検査 / included-file manifest 目視で補完する残余リスク #346 §2）。
 // docs/agent-memory/records/ は個々の記憶レコードの正本置き場（agent-memory-design.md）で、
 // 判断過程・内部議論・非公開の意図を含む生データ。public 側は要約された digest
-// （`agent-memory.js digest --visibility public`）でのみ提供する方針（accepted 記憶
-// mem-20260719-5b65ee「記憶の配置は control 側正本＋public 側 digest」）。digest の public 側
-// 同期の実装自体は本リストへの追加とは別作業（docs/agent-memory/README.md 参照）。
+// （`docs/agent-memory/digest.md`。build-public-tree.js が canonical HEAD の
+// `visibility: public` + active レコードから生成）でのみ提供する（accepted 記憶
+// mem-20260719-5b65ee「記憶の配置は control 側正本＋public 側 digest」）。
 export const CONTROL_ONLY_DIRS = ['docs/pr/', 'docs/pr-analysis/', 'docs/planning/', 'docs/agent-memory/records/'];
 
 // public 側に出さない個別ファイル（root 相対の完全一致・大文字小文字非依存）。

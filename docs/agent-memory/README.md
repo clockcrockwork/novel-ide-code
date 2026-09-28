@@ -120,5 +120,15 @@ node scripts/agent-memory.js search "promote 書込"       # 書込順の設計�
 node scripts/agent-memory.js search "先勝ち 競合"          # 並行 supersede の調停方針を引く
 node scripts/agent-memory.js search --scope security-boundary
 node scripts/agent-memory.js validate                     # 全記憶の整合検査（errors 0 が健全）
-node scripts/agent-memory.js digest --visibility public   # public 記憶だけを digest 出力
+node scripts/agent-memory.js digest --visibility public   # control repo: public 記憶だけを digest 出力
 ```
+
+
+### public review tree での参照
+
+`docs/agent-memory/records/` は control-only のため public tree には含めない。public projection 生成時に
+`scripts/gh/build-public-tree.js` が canonical HEAD の **active + `visibility: public`** レコードだけを
+`docs/agent-memory/digest.md` へ生成する。public 側では正本レコードを復元・編集せず、この digest を検索・参照する（例: `rg -n "<キーワード>" docs/agent-memory/digest.md`）。
+
+Markdown digest は `status / id / kind / scope / title / summary / reviewChecks` の検索用最小情報のみを含み、
+`rationale / sources / paths` は出力しない。生成物なので public repo で直接編集しない。
