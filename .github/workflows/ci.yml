@@ -132,6 +132,7 @@ jobs:
       - run: npm run lint
       - run: npm run check:thresholds
       - run: npm run test
+      - run: npm run build
 
   # worker（Cloudflare Worker）のテスト。root の vitest は vite.config.js の
   # test.exclude で worker/** を除外しているため、このジョブが無いと
