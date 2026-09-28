@@ -26,11 +26,19 @@
 
 ## ローカル検証と CI の責務分担
 
-GitHub Actions の重い CI（`ci.yml`）は **PR ブランチへの push では起動しない**。レビューループ中の検証は
-上表のローカルゲートが担い、GitHub Actions は**レビュー収束後の明示起動**と **main 反映後のバックストップ**を担う。
-起動手順・マージ可否の状態遷移は [ci-run.md](ci-run.md) を正本とする。
+GitHub Actions の重い CI（`ci.yml`）の PR 起動は repository visibility で分かれる。**private control repository**
+では PR ブランチへの push では起動せず、レビューループ中の検証は上表のローカルゲートが担い、GitHub Actions は
+**レビュー収束後の明示起動**と **main 反映後のバックストップ**を担う。public code repository では required status
+checks を満たすため `pull_request` で自動起動する。起動手順・visibility 境界・マージ可否の状態遷移は
+[ci-run.md](ci-run.md) を正本とする。
 
-「CI が拾ってくれる」を理由に上表のローカルゲートを省略しないこと（CI はレビュー収束後まで走らない）。
+「CI が拾ってくれる」を理由に上表のローカルゲートを省略しない。private で Actions の月次上限・runner 未割当等に
+より workflow 内の検査コマンドへ到達できない場合も、**Actions unavailable と code failure を分離したうえで**、
+current HEAD / current diff と current workflow を確認し、上表の変更種別ゲートとローカルで等価実行できる CI step を
+補完する。workflow trigger / permissions / required-check integration / hosted runner 固有挙動等の remote-only 項目は
+未確認のまま明示し、ローカル green で代替したとは扱わない。この command-gate 代替は private の運用判断専用であり、
+public repository の required checks を置き換えない。詳細は [ci-run.md](ci-run.md)「private 期間: エージェントの
+merge 前必須確認」を参照する。
 
 ---
 
