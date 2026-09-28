@@ -259,7 +259,7 @@ check-artifacts.js 自身の出力を対象にした偽装対策では防げな�
         「確認不能」ではない。ファイル自体は読めているか、コマンドの呼び出し方が誤っている
         だけで、PR やログ・本文の状態とは無関係）。これは 4 のどの分岐にも進まない — 上記 b の
         指示に従って引数を組み立て直し、`--verify-proof` を再実行するだけでよい。
-4. 1〜3 のいずれか一つでも満たさない場合は **merge を実行・推奨しない**。
+4. 1〜3 のいずれか一つでも満たさない場合は原則として **merge を実行・推奨しない**。ただし private control repository で、下記の「Actions unavailable but command-verifiable」の条件をすべて満たす場合だけは、CI 成功とは扱わず command gate を代替証拠として通常の merge 判断へ戻してよい。
    - CI が未実行、または対象 SHA に紐づく `required-gate` run が無い場合 → **まず手順1をやり直して
      現在の head SHA を取り直す**（起動と待機の間に別の push で head が動いていると、起動した run
      の `head_sha` は手順1で取得した古い SHA と永久に一致しない）。取り直した head SHA に対する
@@ -309,8 +309,33 @@ check-artifacts.js 自身の出力を対象にした偽装対策では防げな�
      artifact 不備等）を修正したうえで再走を待ち、新しい run に対して同様に手順1からやり直す。
      **原因を特定・修正しないまま同じ理由で2回連続 `result=failed` になった場合は、本文編集
      を繰り返さず確認不能として人間へ報告する**（上記の不一致ループと同じ理由）。
+   - **private control repository に限り、Actions unavailable と command failure を分離する**。
+     workflow run/job は作成されているが runner が一度も割り当てられず、steps が空、job log も
+     生成されない等、**workflow 内の検査コマンドへ到達していないことを API 上の事実から確認
+     できる場合**は、月次上限・runner unavailable 等の Actions infrastructure failure として扱う。
+     この状態は lint/test/audit/artifacts の failure ではない。
+     - current HEAD と current PR diff を取り直し、[verification-gates.md](verification-gates.md) の
+       変更種別表と **current workflow の実際の step** を突き合わせ、ローカルで等価実行できる
+       command gate をすべて実行する。固定コマンド一覧を本書へ複製せず、存在する script / workflow
+       を都度確認する（コマンド名を推測しない）。
+     - command gate が green でも **「CI green」とは記録しない**。
+       `Actions unavailable / command gates green` とし、current head SHA、対象 run/job、runner
+       未割当等の根拠、実行コマンドと結果、未確認の remote-only 項目を PR / `docs/pr/PR-{n}.md`
+       に残す。
+     - workflow trigger / event context、token / permissions、required status checks / ruleset integration、
+       hosted runner 固有環境、Actions artifact/cache wiring、proof binding 等は **remote-only** であり、
+       ローカル command で代替したとみなさない。
+     - 今回の変更が remote-only 挙動そのもの（`.github/workflows/**` の trigger / permissions、
+       required-check 構成・名称・aggregation、cache / artifact / `workflow_run` 等の trust boundary）
+       を変える場合は、この代替経路で通常の merge 判断へ戻さず、人間へ未検証条件として報告する。
+     - 上記 remote-only が今回の変更の本質ではなく、変更種別に対応する command gate がすべて green
+       なら、private repository では通常の merge 判断へ進んでよい。Actions 枠復旧後の CI は
+       backstop として扱い、未確認の remote-only 項目だけを後追い確認する。
+     - **public repository には適用しない**。public `novel-ide-code` は active ruleset の
+       `required-gate` + `artifacts-gate` を実際に満たすまで merge しない。
    - workflow の起動・完了状態を確認できない場合、証明行が見つからない場合（API エラー・権限
-     不足・GitHub 障害・ログ/本文ファイルの取得失敗・run 自体の早期失敗等）は、**確認不能で
+     不足・GitHub 障害・ログ/本文ファイルの取得失敗・run 自体の早期失敗等）で、上記の
+     「runner 未割当で検査本体へ未到達」と機械的に切り分けられない場合は、**確認不能で
      ある事実と未検証項目を人間へ報告する**。この状態を「人間へ委ねたので通常どおり merge
      してよい」という経路として扱わない。人間がそれでも merge する場合は、通常の merge 判断
      ではなく「CI 未確認の例外的な手動 merge」として明示的に判断してもらう（エージェントは
@@ -342,7 +367,9 @@ private repository では GitHub 側が merge を技術的に強制停止しな�
 | `artifacts-gate` 失敗（証明行不一致・`result=failed`・確認不能） | failure | **merge 禁止**。対処は上記「merge 前必須確認」§4 |
 | CI 成功（`required-gate`）／`artifacts-gate` も証明行が現在の PR 状態と一致して success | success | merge 判断へ進んでよい |
 | CI 成功後に新しい push | `required-gate` の新 SHA には check run が無い | **merge 禁止・再実行**。古い成功 run を根拠にしない |
-| CI 確認不能（API エラー・権限不足・GitHub 障害等） | 不明 | **merge を実行・推奨しない**。確認不能の事実と未検証項目を人間へ報告する。それでも人間が merge する場合は「CI 未確認の例外的な手動 merge」として明示判断してもらう（通常の merge 判断の代替経路にしない） |
+| Actions unavailable but command-verifiable（private のみ） | run/job は存在するが runner 未割当・steps/logs 無し等で検査本体へ未到達 | current HEAD で変更種別 + current workflow に対応する command gate をすべて実行。green かつ remote-only が今回の変更の本質でなければ通常の merge 判断へ進んでよい。**CI green とは記録しない** |
+| remote-only verification unavailable（private） | trigger / permissions / required-check / hosted runner / artifact・cache wiring 等を Actions 上で未確認 | 今回の変更の本質なら人間判断条件として残す。ローカル green を代替証拠と偽らない |
+| CI 確認不能（API エラー・権限不足・GitHub 障害等。runner 未割当と切り分け不能） | 不明 | **merge を実行・推奨しない**。確認不能の事実と未検証項目を人間へ報告する。それでも人間が merge する場合は「CI 未確認の例外的な手動 merge」として明示判断してもらう（通常の merge 判断の代替経路にしない） |
 | PR 本文のみ編集 | `artifacts-gate` が自動で再実行（新しい run ID が割り当たる。`required-gate` の対象 SHA は不変） | `artifacts-gate` は**手順1から**（§3a からではない — 本文を再取得しないと `body-sha256` が編集前の値のまま不一致になる）やり直して得た新しい run の証明行で確認、`required-gate` は SHA 一致で確認（別基準・上記「merge 前必須確認」） |
 | workflow 設定自体を変更 | 変更後のブランチ HEAD を手動起動すると、そのブランチ版の `ci.yml` で実行される | 起動して確認 |
 | CI を同一 run 内で Re-run（GitHub UI の re-run） | 同一 run の `run_attempt` が増え、その run の check run が置き換わる | 最新の結果だけを無条件に信じない。過去 attempt に failure があれば §2b・§4 の failure 分岐に従う（一過性障害としての再試行は `workflow_dispatch` 再起動と合わせて1回まで） |
