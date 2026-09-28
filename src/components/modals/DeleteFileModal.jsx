@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef } from 'react';
+import { useApp } from '../../context/AppContext';
 import { useUIStore } from '../../stores/uiStore';
 
 export default function DeleteFileModal() {
+  const { deleteFile } = useApp();
   const modal = useUIStore((s) => s.deleteFileModal);
   const setDeleteFileModal = useUIStore((s) => s.setDeleteFileModal);
   const dialogRef = useRef(null);
@@ -19,7 +21,8 @@ export default function DeleteFileModal() {
 
   const close = () => setDeleteFileModal(null);
   const confirm = () => {
-    modal.onConfirm();
+    deleteFile(modal.fileId);
+    modal.onDeleted?.();
     close();
   };
 
