@@ -9,6 +9,7 @@ import SettingsModal from './components/modals/SettingsModal';
 import ExportModal from './components/modals/ExportModal';
 import GithubModal from './components/modals/GithubModal';
 import DeleteFolderModal from './components/modals/DeleteFolderModal';
+import DeleteFileModal from './components/modals/DeleteFileModal';
 import NameInputModalHost from './components/modals/NameInputModalHost';
 import PasteConfirmModal from './components/modals/PasteConfirmModal';
 import ClearDataModal from './components/modals/ClearDataModal';
@@ -398,6 +399,7 @@ export default function App() {
       {showGithub && <GithubModal />}
       {showExport && <ExportModal />}
       <DeleteFolderModal />
+      <DeleteFileModal />
       <NameInputModalHost />
       <PasteConfirmModal />
       <ClearDataModal />
