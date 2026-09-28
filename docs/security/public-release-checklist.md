@@ -51,7 +51,7 @@ diff /tmp/public-expected.txt /tmp/public-actual.txt; echo "exit=$?"
 | `docs/pr/` | AI コードレビューの会話ログ（~130 件）。判断過程・内部議論を含む |
 | `docs/pr-analysis/` | PR 分析の中間データ（`items.json` 等） |
 | `docs/planning/` | 非公開ロードマップ・上位計画（品質/AI運用/public化準備）。実施順・未決事項・AI運用方針など内部判断を含む |
-| `docs/agent-memory/records/` | 検索型永続記憶の正本レコード。判断過程・不採用理由・教訓など内部判断を含む。public 側は要約された digest（`agent-memory.js digest --visibility public`。public 側への同期は別作業）でのみ提供する。`docs/agent-memory/README.md` 自体は説明文書のため public に残す |
+| `docs/agent-memory/records/` | 検索型永続記憶の正本レコード。判断過程・不採用理由・教訓など内部判断を含むため全件 control-only。public 側は `build-public-tree.js` が canonical HEAD の active + `visibility: public` のみから生成する `docs/agent-memory/digest.md` で提供する。digest は manifest の included / includedShas に含めて内容を束縛する。`docs/agent-memory/README.md` 自体は説明文書のため public に残す |
 | `.github/dependabot.yml` / `.github/dependabot.yaml` | 依存更新 automation の設定。public repo 自身を version update PR の発生元にしない（public は canonical からの projection で、依存更新の評価・適用は control repo の責務。public 側で生成された PR を取り込むと canonical を迂回する）。個別ファイルの除外（`CONTROL_ONLY_FILES`） |
 | `.env*`（`.env` / `.env.local` / `.envrc` 等）, `*.local` | secret。`.gitignore` 済み（[5](#5-env--api-key--local-設定-除外確認) で不在を再確認）。そもそも tracked されない |
 | GitHub Issues 本体 | ファイルではないが、非公開の設計判断・脆弱性議論を含むため control 側に留める（GitHub 上の操作） |
