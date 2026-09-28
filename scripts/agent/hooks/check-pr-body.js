@@ -20,8 +20,9 @@ if (process.stdin.isTTY) failOpen();
 // npm install 前の fresh clone では解決に失敗する — その場合も fail-open を維持する（CI が最終防衛線）
 let checkArtifacts;
 let gitChangedFiles;
+let gitHeadSha;
 try {
-  ({ checkArtifacts, gitChangedFiles } = await import('../check-artifacts.js'));
+  ({ checkArtifacts, gitChangedFiles, gitHeadSha } = await import('../check-artifacts.js'));
 } catch {
   failOpen();
 }
@@ -59,7 +60,23 @@ try {
 const changedFiles = gitChangedFiles(`origin/${base}`);
 if (changedFiles === null) failOpen();
 
-const { errors } = checkArtifacts({ changedFiles, body });
+// #645: Authority receipt の head 束縛検証に使う「現在の PR head」。ローカル HEAD が実際に
+// push される head SHA になる前提（create_pull_request/update_pull_request は現在の HEAD を
+// push した後に呼ばれる）。`gitHeadSha()`（override 無しの `git rev-parse HEAD` のみ）を使う —
+// action/CLI 用の `resolveHeadSha()`（--head-sha 引数 → HEAD_SHA env → git の順）を hook から
+// 呼ぶと、セッション環境に `HEAD_SHA` が残っていた場合に古い SHA を「現在の HEAD」と誤って
+// 採用してしまう（Codex 指摘: #646。以前は重複実装回避を理由に `resolveHeadSha()` を共有
+// していたが、hook の目的は「まさに push される現在の作業ツリー」の検査であり、外部から
+// 主張された head 値を信用してはならないため、override を一切通さない下位関数だけを共有する
+// 形に変更した）。
+// 取得できない場合は null のままにし、checkArtifacts 側は receipt を「束縛できない」＝ stale
+// 相当として安全側（legacy Tier）へ倒す（fail-open にはしない — この hook 自体は他の失敗と
+// 同じく fail-open だが、headSha 単体の欠落は「検査を諦める」理由にしない。既知の限界:
+// update_pull_request で現在のブランチと別の PR の本文を編集する場合、ローカル HEAD がその
+// PR の実際の head と一致しないことがある。その場合も CI が正）。
+const headSha = gitHeadSha();
+
+const { errors, warnings } = checkArtifacts({ changedFiles, body, headSha });
 if (errors.length > 0) {
   console.error('check-pr-body hook: この本文では CI の artifacts-gate が失敗します:');
   for (const e of errors) console.error(`  ✗ ${e}`);
@@ -67,5 +84,31 @@ if (errors.length > 0) {
     'PR 本文を修正してから再実行してください（例外は <!-- artifacts-check: skip (理由) --> を明記）。',
   );
   process.exit(2); // exit 2 = ツール呼び出しをブロックし、stderr をエージェントに返す
+}
+// #645: warnings（Authority receipt が stale/fallback で採用されなかった等）は失敗ではないため
+// ブロックしないが、CI の `::warning::` annotation は GitHub Checks UI を開かないと見えない
+// （運用性レビュー所見: authority routing の削減が効いていることに誰も気づけない）。
+// PreToolUse hook の stderr は exit 2 のときだけエージェントに渡り、exit 0 では
+// デバッグログにのみ残りエージェントには渡らない
+// （https://code.claude.com/docs/en/hooks.md「Exit Code 0」: stderr is logged to debug only,
+// Claude never sees it）。ブロックせずにエージェント自身へ気づかせるには、JSON の
+// `hookSpecificOutput.additionalContext` フィールドで stdout へ返す必要がある
+// （Codex 指摘: #646。前回の stderr 出力は transcript にしか残らず、意図した事前通知として
+// 機能していなかった）。
+// `permissionDecision` は絶対に指定しないこと — `"allow"` は「権限確認をスキップして
+// 自動許可する」という**権限判断そのもの**であり、単なる非ブロッキング通知ではない
+// （Codex 続報指摘: #646。この hook は `.claude/settings.json` で
+// `mcp__github__create_pull_request`/`update_pull_request` にマッチしているため、
+// 誤って `allow` を返すと本来ユーザーの承認を要する PR 作成・更新が無条件に自動許可されて
+// しまっていた）。`permissionDecision` を省略すれば通常の permission flow がそのまま適用される。
+if (warnings.length > 0) {
+  process.stdout.write(
+    `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext: warnings.map((w) => `check-pr-body hook: ⚠ ${w}`).join('\n'),
+      },
+    })}\n`,
+  );
 }
 process.exit(0);

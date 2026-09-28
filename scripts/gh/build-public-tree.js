@@ -1,7 +1,7 @@
 // public code repo 用の sanitized tree 生成（#345）。
 // 現在の作業ツリーからコピーせず **HEAD コミットの blob** を読む（unstaged/staged 変更・実行中の
-// ファイル変化・stale 出力に汚染されない。#345 レビュー指摘5）。denylist 方式で control-only 3
-// ディレクトリのみ除外し、secret 風 tracked / symlink / submodule / 非 regular file は
+// ファイル変化・stale 出力に汚染されない。#345 レビュー指摘5）。denylist 方式で control-only パス
+// （CONTROL_ONLY_DIRS / CONTROL_ONLY_FILES）のみ除外し、secret 風 tracked / symlink / submodule / 非 regular file は
 // **silent 除外せず fail**（fail-closed。同レビュー指摘3/5）。source repo は read-only、書き込みは
 // 出力先のみ。public repo 作成・push は行わない（オーナー手動実行）。
 //

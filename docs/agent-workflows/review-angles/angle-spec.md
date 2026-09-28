@@ -9,7 +9,7 @@
 > **Cost note:** 作者の自己評価を先に読むと、その説明が期待値としてアンカーされ「issue が求めたものと違う正しい実装」を素通しする
 <!-- agent-commons:generated source=angle-spec version=1.0.0 — 手編集しない。正本は agent-commons/core と docs/agent-workflows/overlays -->
 
-あなたのアンカーは **issue・MVP_PLAN・ドメイン docs から導出した期待挙動**である。作者が「何をしたつもりか」ではなく「何をすべきだったか」と diff を突き合わせる。
+あなたのアンカーは **issue・MVP_PLAN・ドメイン docs から導出した期待挙動**である。作者が「何をしたつもりか」ではなく「何をすべきだったか」と diff を突き合わせる。本系統は issue / domain / contract から独立導出した **semantic な期待挙動の不一致**を所有する。schema / format 等、機械的に判定できる契約検証（型・必須フィールド・書式）は本系統の主責務にしない（下記 Machine boundary）。
 
 ## 問い
 

@@ -23,9 +23,11 @@ import {
   computeInitialTier,
   emptyState,
   hasDesignAddon,
+  deriveEscalatedAngles,
   deriveSignals,
   discardLegacyFindingArtifacts,
   escalateAngles,
+  formatAuthorityReceipt,
   formatPlan,
   STATE_VERSION,
   loadState,
@@ -35,6 +37,9 @@ import {
   recordRun,
   recordRunCommand,
   resolveRecordRunSnapshotId,
+  resolveRoutingAuthority,
+  ROUTING_ASSESSMENT_FILE,
+  ROUTING_FALLBACK_REASONS,
   selectMode,
   stateFile,
   tierNameForAngles,
@@ -43,6 +48,7 @@ import {
 import { classify } from '../scripts/agent/classify-changes.js';
 import { makeTmpGitRepo, sh } from './helpers/tmpGitRepo.js';
 import { DESIGN_ADDON_ANGLES, TIER_ANGLES } from '../scripts/agent/review-angle-tokens.js';
+import { deriveShadowEscalatedAngles } from '../scripts/agent/shadow-routing.js';
 import {
   changedFilesBetween,
   classifyFile,
@@ -1546,6 +1552,843 @@ test('escalate: 条件起動系統（記憶適合）は宣言 Tier 名を広げ�
   const normal = lightState();
   escalateAngles(normal, { angles: ['operability'], reason: 'x' });
   assert.equal(normal.effectiveTier, 'Light＋設計文書');
+});
+
+test('escalate: testquality（canonical 登録済みだが legacy Tier 表に無い通常 angle）も宣言 Tier 名を広げない（Phase 5 §15.4。risk-modeling 調査で事前検出した回帰）', () => {
+  const state = lightState();
+  escalateAngles(state, { angles: ['testquality'], reason: 'test の検出力だけ再確認したい' });
+  assert.equal(
+    state.effectiveTier,
+    'Light',
+    'testquality は memory と同じ理由（Tier 表に属さない）で widenEffectiveTier の宣言名計算から' +
+      '除外する。除外しなければ tierNameForAngles が被覆できず、フォールバックの Full＋設計文書 へ' +
+      '無条件に倒れる（PR-580 #3 で memory に対して実際に発生した回帰と同型）',
+  );
+  assert.ok(state.addedAngles.includes('testquality'), '加算と再起動義務には反映する');
+  assert.equal(
+    state.escalations.at(-1).kind,
+    'manual-escalation',
+    'authority routing の escalatedAngles 導出が provenance source にする kind を記録する',
+  );
+
+  // 対照: 通常系統の escalate は従来どおり実効 Tier を広げる（memory テストと同じ対照構成）
+  const normal = lightState();
+  escalateAngles(normal, { angles: ['operability'], reason: 'x' });
+  assert.equal(normal.effectiveTier, 'Light＋設計文書');
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5 §15.4 authority switch — authority routing（resolveRoutingAuthority / buildPlan）
+// ---------------------------------------------------------------------------
+
+function tempSnapshotDir(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'routing-authority-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test('resolveRoutingAuthority: shadow-routing.json が存在しない → fallback/missing', (t) => {
+  const dir = tempSnapshotDir(t);
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'missing');
+});
+
+test('resolveRoutingAuthority: snapshotDir が不明（未指定 / 空文字）でも fallback/missing で安全に倒れる（fixture 由来の snap 等）', () => {
+  assert.equal(resolveRoutingAuthority({ snapshotDir: undefined, snapshotId: 's1' }).authority, 'fallback');
+  assert.equal(resolveRoutingAuthority({ snapshotDir: undefined, snapshotId: 's1' }).reason, 'missing');
+  assert.equal(resolveRoutingAuthority({ snapshotDir: '', snapshotId: 's1' }).reason, 'missing');
+});
+
+test('resolveRoutingAuthority: ファイルの代わりにディレクトリがある（読み取り不能） → fallback/error', (t) => {
+  const dir = tempSnapshotDir(t);
+  mkdirSync(join(dir, ROUTING_ASSESSMENT_FILE));
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'error');
+});
+
+test('resolveRoutingAuthority: 不正な JSON → fallback/invalid', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(join(dir, ROUTING_ASSESSMENT_FILE), '{not json');
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+});
+
+test('resolveRoutingAuthority: JSON だがオブジェクトではない（配列） → fallback/invalid', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(join(dir, ROUTING_ASSESSMENT_FILE), '[]');
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+});
+
+test('resolveRoutingAuthority: snapshotId が現在の snapshot と一致しない（stale） → fallback/stale', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 'old-snap',
+      valid: true,
+      shadowFailure: null,
+      selection: { selectedAngles: ['riskmodel'], selectedSidecars: [] },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 'current-snap' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'stale');
+});
+
+test('resolveRoutingAuthority: valid !== true（shadow 自身が invalid と判定済み） → fallback/invalid', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: false,
+      shadowFailure: { reason: 'invalid-assessment' },
+      selection: null,
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+  assert.match(result.detail, /invalid-assessment/);
+});
+
+// 敵対的レビュー所見 R4: shadow-routing.js 自身は valid: true を書く場合 shadowFailure を必ず
+// null にする。この2つが矛盾した状態（valid: true かつ shadowFailure 非 null）は壊れた・改変
+// された成果物の兆候であり、信頼せず fallback/invalid として拒否する（risk-model 検証 2周目所見:
+// この分岐のテストが本 diff に無かったため追加）。
+test('resolveRoutingAuthority: valid:true かつ shadowFailure 非 null（矛盾状態）→ fallback/invalid', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: true,
+      shadowFailure: { reason: 'invalid-assessment' },
+      selection: { selectedAngles: ['riskmodel'], selectedSidecars: [] },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+  assert.match(result.detail, /矛盾/);
+});
+
+test('resolveRoutingAuthority: selection.selectedAngles が配列でない → fallback/invalid', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: true,
+      shadowFailure: null,
+      selection: { selectedAngles: 'not-an-array' },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+});
+
+test('resolveRoutingAuthority: 全条件を満たせば authority。selectedAngles/selectedSidecars がそのまま通る', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: ['riskmodel', 'testquality'],
+        selectedSidecars: ['/security-review'],
+      },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'authority');
+  assert.deepEqual(result.selectedAngles.sort(), ['riskmodel', 'testquality']);
+  assert.deepEqual(result.selectedSidecars, ['/security-review']);
+});
+
+// 敵対的レビュー所見 F2/F3: 閉じた語彙外の値を「該当要素だけ黙って除去して縮小した集合を
+// authority 採用」してはならない。assessment 全体を invalid として fallback へ倒す
+// （縮小集合が閉じた語彙外の入力を理由に静かに成立する経路を塞ぐ）。
+test('resolveRoutingAuthority: selectedAngles に閉じた語彙外・非文字列が1件でもあれば assessment 全体を invalid として fallback へ倒す（黙って除去しない）', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: ['riskmodel', 'testquality', 'not-a-real-angle', 42],
+        selectedSidecars: [],
+      },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+});
+
+test('resolveRoutingAuthority: selectedSidecars に KNOWN_SIDECARS 外の値があれば assessment 全体を invalid として fallback へ倒す', (t) => {
+  const dir = tempSnapshotDir(t);
+  writeFileSync(
+    join(dir, ROUTING_ASSESSMENT_FILE),
+    JSON.stringify({
+      version: 1,
+      snapshotId: 's1',
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: ['riskmodel'],
+        selectedSidecars: ['/security-review', '; rm -rf /'],
+      },
+    }),
+  );
+  const result = resolveRoutingAuthority({ snapshotDir: dir, snapshotId: 's1' });
+  assert.equal(result.authority, 'fallback');
+  assert.equal(result.reason, 'invalid');
+});
+
+test('§14 Q: missing/invalid/stale/error のいずれの fallback でも buildPlan は空集合・縮小集合へ倒さず legacyReviewContract を適用する', () => {
+  const changed = [file('src/lib/writingRules.js')];
+  for (const reason of ROUTING_FALLBACK_REASONS) {
+    const state = lightState();
+    const plan = buildPlan({
+      state,
+      manifest: manifest(),
+      changedFiles: changed,
+      changedInFix: changed,
+      routing: { authority: 'fallback', reason, detail: `test fixture: ${reason}` },
+    });
+    assert.equal(plan.routingAuthority, 'fallback', `reason=${reason}`);
+    assert.equal(plan.routingFallbackReason, reason, `reason=${reason}`);
+    assert.ok(
+      plan.effectiveAngles.length > 0,
+      `reason=${reason}: fallback は空集合へ倒さない（§3.5-8, §14 Q）`,
+    );
+    assert.deepEqual(
+      new Set(plan.effectiveAngles),
+      new Set(plan.legacyAngles),
+      `reason=${reason}: fallback は legacyReviewContract（legacyAngles）を current snapshot へ` +
+        '適用した結果と一致する',
+    );
+  }
+});
+
+test('§14 Q: valid な assessment では semantic selectedAngles が通常 angle の適用集合の正本になる（legacy Light の必須系統に縛られず縮小できる）', () => {
+  const changed = [file('src/lib/writingRules.js')];
+  const state = lightState();
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel', 'testquality'], selectedSidecars: [] },
+  });
+  assert.equal(plan.routingAuthority, 'authority');
+  assert.deepEqual(new Set(plan.effectiveAngles), new Set(['riskmodel', 'testquality']));
+  assert.notDeepEqual(
+    new Set(plan.effectiveAngles),
+    new Set(plan.legacyAngles),
+    'authority は legacy Light（5系統）の必須系統に縛られず縮小できる（削減効果を相殺しない）',
+  );
+  // Tier 名の表示は authority 選択に影響されない（§15.6: Tier は表示互換・fallback 用途のまま）
+  assert.equal(plan.effectiveTier, 'Light');
+});
+
+// 敵対的レビュー所見 F1（blocker・実行確認済み）: 高リスク diff ＋ 全 dimension false の
+// assessment（＝ selectedAngles: []）を authority がそのまま採用すると、レビュアー0本のまま
+// converged: true に到達してしまう。§4.2 で selectedAngles が正当に空集合になりうるのは
+// docsOnly ∧ semanticDocs=false（＝ classify() の codeChanged=false。shadow-routing.js の
+// machineFacts.docsOnly と同じ判定）の場合だけであり、コード変更を伴う diff での空集合は
+// 信頼できない縮退として fallback へ倒す。
+//
+// フロアの判定は `initial.base` ではなく `classify(expandRenames(changedFiles)).codeChanged`
+// を直接使う（敵対的レビュー2周目所見 F-A1/F-A2 の修正）。`initial.base` は legacy Tier の
+// 「基礎 Tier（Full/Light）かどうか」という別軸で、depOnly（依存 manifest のみの変更）＋ docs
+// 混在は codeChanged=true でも base=null になる（下記 F-A1 テスト）ため代理にできなかった。
+test('§14 Q（敵対的所見 F1）: コード変更を伴う diff で authority selectedAngles が空集合なら、信頼せず legacyReviewContract fallback へ倒す', () => {
+  const changed = [file('worker/index.js')]; // 高リスク領域（HIGH_RISK_PATTERNS）→ initial.base='Full'
+  const state = emptyState();
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: [], selectedSidecars: [] },
+  });
+  assert.equal(
+    plan.routingAuthority,
+    'fallback',
+    '全 dimension false（空集合）は高リスク diff では信頼できないため fallback へ倒す',
+  );
+  assert.equal(plan.routingFallbackReason, 'invalid');
+  assert.ok(plan.effectiveAngles.length > 0, 'レビュアー0本のまま収束させない');
+  assert.deepEqual(new Set(plan.effectiveAngles), new Set(plan.legacyAngles));
+});
+
+test('§14 Q（敵対的所見 F1 の対照）: docs のみの diff（docsOnly）では authority selectedAngles の空集合を正当な縮小として採用する（§4.2 docsOnly∧semanticDocs=false）', () => {
+  const changed = [file('docs/some-notes.md')];
+  const state = emptyState();
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: [], selectedSidecars: [] },
+  });
+  assert.equal(
+    plan.routingAuthority,
+    'authority',
+    'docsOnly diff（codeChanged=false）では空集合が正当なフロアなので authority のまま',
+  );
+  assert.deepEqual(plan.effectiveAngles, []);
+});
+
+// 敵対的レビュー2周目所見 F-A1（high・実行確認済み）: depOnly（依存 manifest のみのコード変更。
+// package.json + package-lock.json）＋ docs 混在は `computeInitialTier` が `base: null`
+// （設計文書 Tier。legacy Tier 側は docs Tier へ委ねる設計 — computeInitialTier のコメント参照）
+// を返すが、classify() の codeChanged は package.json/package-lock.json の変更それ自体で true
+// になる（shadow-routing.js の machineFacts.docsOnly=!codeChanged と同じ判定基準では
+// docsOnly=false）。`initial.base===null` を docsOnly の代理として使っていた旧実装ではこの
+// ケースで空集合フロアが不発になり、全 dimension false の assessment がそのまま authority
+// 採用され、レビュアー0本・converged:true に到達していた（サプライチェーン変更を含む diff で
+// 再現）。
+test('§14 Q（敵対的レビュー2周目所見 F-A1）: depOnly＋docs混在（initial.base===null だが codeChanged=true）では空集合フロアが発火する', () => {
+  const changed = [
+    file('package.json'),
+    file('package-lock.json'),
+    file('docs/agent-workflows/x.md'),
+  ];
+  const initial = computeInitialTier(changed);
+  assert.equal(
+    initial.base,
+    null,
+    '前提: computeInitialTier は depOnly＋docs混在を base:null（設計文書 Tier）に分類する',
+  );
+  const { codeChanged } = classify(changed);
+  assert.equal(codeChanged, true, '前提: 依存 manifest の変更自体は codeChanged=true になる');
+
+  const state = emptyState();
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: [], selectedSidecars: [] },
+  });
+  assert.equal(
+    plan.routingAuthority,
+    'fallback',
+    'initial.base===null でも codeChanged=true（依存 manifest の変更）なら空集合フロアは発火する',
+  );
+  assert.equal(plan.routingFallbackReason, 'invalid');
+  assert.ok(plan.effectiveAngles.length > 0, 'レビュアー0本のまま収束させない（F-A1 の再現防止）');
+});
+
+// 未登録 machine ID のみの selection は空集合フィルタ経由ではなく resolveRoutingAuthority が
+// invalid として拒否する（F2 の fix）ため、buildPlan 側は非空文字列の集合しか受け取らない —
+// ここでは buildPlan 単体の空集合フロアが escalatedAngles を含めた合算で正しく働くことを固定する
+test('§14 Q（敵対的所見 F1）: selectedAngles が空でも escalatedAngles があれば空集合フロアは発火しない', () => {
+  const changed = [file('worker/index.js')];
+  const state = emptyState();
+  escalateAngles(state, { angles: ['adversarial'], reason: '外部レビューで見逃しが判明' });
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: [], selectedSidecars: [] },
+  });
+  assert.equal(plan.routingAuthority, 'authority');
+  assert.deepEqual(plan.effectiveAngles, ['adversarial']);
+});
+
+test('§14 X: authority が testquality を選択すると canonical 登録済みのため例外なく entries へ反映される（legacy Full は不変）', () => {
+  const changed = [file('src/lib/writingRules.js')];
+  const state = lightState();
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['testquality'], selectedSidecars: [] },
+  });
+  assert.ok(plan.effectiveAngles.includes('testquality'));
+  const entry = plan.entries.find((e) => e.angle === 'testquality');
+  assert.ok(
+    entry,
+    'testquality の entry が生成される（selectMode / resolveExecConfig が未知の観点として' +
+      '例外を投げない — ANGLE_TRIGGERS / ANGLE_EXEC_BASELINE への登録が必須）',
+  );
+  assert.equal(entry.run, true, '初回探索としてこの attempt で起動対象になる');
+  assert.equal(entry.mode, 'full-rescan');
+  assert.equal(entry.exec.model, 'sonnet');
+  // canonical registry 登録（ANGLE_TOKENS）と legacy Tier 必須系統への追加は独立した決定
+  // （§15.4 の明示禁止）: authority が testquality を選択しても Full には現れない
+  assert.ok(!TIER_ANGLES.Full.includes('testquality'));
+  assert.equal(plan.effectiveTier, 'Light', 'Tier 名の計算は legacyAngles 基準のまま変わらない');
+});
+
+// risk-model 検証所見: resolveRoutingAuthority / buildPlan の各単体テストは routing を直接注入する
+// か一時ディレクトリを直接渡すだけで、実運用で唯一使われる経路（`npm run review:plan` CLI →
+// planCommand → resolveRoutingAuthority が実 snapshot ディレクトリの shadow-routing.json を読む
+// → buildPlan の authority 分岐が発火する）を一度も通していなかった。fallback は安全側に倒れる
+// ため即座の誤動作は起きないが、この配線自体が壊れていても検出できず、authority switch の効果が
+// 常時無効化されたまま気づかれない可能性がある。CLI プロセス境界を越えた結合テストで実配線を
+// 固定する（想定ケース表への追加候補: 実 shadow-routing.json → CLI → review-plan.json）。
+test('CLI 結合: 実 snapshot ディレクトリに shadow-routing.json を書くと `review:plan` が authority mode で selectedAngles を採用する', (t) => {
+  const dir = makePlanRepo(t);
+  writeFileSync(join(dir, 'src.js'), 'export const a = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'f1'], { cwd: dir });
+  createSnapshot({ cwd: dir, baseRef: 'main' });
+
+  const snap = latestSnapshot(dir);
+  writeFileSync(
+    join(snap.dir, 'shadow-routing.json'),
+    `${JSON.stringify({
+      version: 1,
+      snapshotId: snap.snapshotId,
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: ['riskmodel', 'testquality'],
+        conditionalAngles: [],
+        escalatedAngles: [],
+        selectedSidecars: [],
+      },
+    })}\n`,
+  );
+
+  runPlanCli(dir, ['plan']);
+  const plan = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  assert.equal(
+    plan.routingAuthority,
+    'authority',
+    'CLI 経由でも実 shadow-routing.json を正しく発見・検証し authority mode になる',
+  );
+  assert.deepEqual(new Set(plan.effectiveAngles), new Set(['riskmodel', 'testquality']));
+  assert.ok(
+    plan.entries.some((e) => e.angle === 'testquality' && e.run === true),
+    'testquality が CLI 経由の実行計画にも launch 対象として現れる',
+  );
+});
+
+// 外部レビュー Codex 指摘 P1: `record-run` の照合に使う `plannedLaunches` が `routing` を一切
+// 受け取らず常に buildPlan(routing:null) → legacyReviewContract fallback を再計算していたため、
+// authority mode が実際に選択した系統（legacy Tier に属さないため fallback 側の計画には
+// 一切現れない testquality が典型例）を record-run しようとすると「計画が要求していない起動」
+// として拒否され、authority mode のレビューを完了できなかった。
+test('CLI 結合（外部レビュー Codex 指摘 P1）: authority mode が選択した系統は record-run でも受理される（plannedLaunches に routing が伝播する）', (t) => {
+  const dir = makePlanRepo(t);
+  writeFileSync(join(dir, 'src.js'), 'export const a = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'f1'], { cwd: dir });
+  createSnapshot({ cwd: dir, baseRef: 'main' });
+
+  const snap = latestSnapshot(dir);
+  writeFileSync(
+    join(snap.dir, 'shadow-routing.json'),
+    `${JSON.stringify({
+      version: 1,
+      snapshotId: snap.snapshotId,
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: ['riskmodel', 'testquality'],
+        conditionalAngles: [],
+        escalatedAngles: [],
+        selectedSidecars: [],
+      },
+    })}\n`,
+  );
+
+  runPlanCli(dir, ['plan']);
+  const plan = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  const entry = plan.entries.find((e) => e.angle === 'testquality' && e.run === true);
+  assert.ok(entry, '前提: testquality が authority mode の起動対象として計画されている');
+
+  assert.doesNotThrow(() =>
+    runPlanCli(dir, [
+      'record-run',
+      '--angle',
+      'testquality',
+      '--mode',
+      entry.mode,
+      entry.fresh ? '--fresh' : '--continue',
+      '--status',
+      'complete',
+    ]),
+  );
+
+  const stateAfter = JSON.parse(readFileSync(stateFile(dir), 'utf-8'));
+  assert.ok(
+    stateAfter.runs.some((r) => r.angle === 'testquality' && r.snapshotId === snap.snapshotId),
+    'testquality（legacy Tier に属さず fallback 計画には現れない系統）の起動が実際に記録される',
+  );
+});
+
+// 外部レビュー Codex 指摘 P1: 同一 snapshot の shadow-routing.json は `assess` の再実行で
+// 上書きできる。1回目の assessment が選んだ testquality の run が incomplete のまま、2回目の
+// valid assessment が testquality を選択から外すと、authority mode の effectiveAngles は
+// shadow-routing.json から毎回生で再構築されるため、testquality の incomplete 義務が
+// entries/blockers から消えて converged:true が偽装されうる（legacy mode は
+// widenEffectiveTier が加算のみのため構造的に起きない）。
+test('CLI 結合（外部レビュー Codex 指摘 P1）: 再assessmentで選択から外れても、直前の incomplete run の義務は消えない', (t) => {
+  const dir = makePlanRepo(t);
+  writeFileSync(join(dir, 'src.js'), 'export const a = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'f1'], { cwd: dir });
+  createSnapshot({ cwd: dir, baseRef: 'main' });
+
+  const snap = latestSnapshot(dir);
+  const writeAssessment = (selectedAngles) =>
+    writeFileSync(
+      join(snap.dir, 'shadow-routing.json'),
+      `${JSON.stringify({
+        version: 1,
+        snapshotId: snap.snapshotId,
+        valid: true,
+        shadowFailure: null,
+        selection: { selectedAngles, conditionalAngles: [], escalatedAngles: [], selectedSidecars: [] },
+      })}\n`,
+    );
+
+  // 1回目の assessment: riskmodel と testquality を選択
+  writeAssessment(['riskmodel', 'testquality']);
+  runPlanCli(dir, ['plan']);
+  const plan1 = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  const tqEntry = plan1.entries.find((e) => e.angle === 'testquality' && e.run === true);
+  assert.ok(tqEntry, '前提: testquality が起動対象として計画されている');
+
+  // testquality の起動を incomplete として記録（未確認範囲が残っている状態を模す）
+  runPlanCli(dir, [
+    'record-run',
+    '--angle',
+    'testquality',
+    '--mode',
+    tqEntry.mode,
+    tqEntry.fresh ? '--fresh' : '--continue',
+    '--status',
+    'incomplete',
+  ]);
+
+  // 2回目の assessment（同一 snapshot の再 assess を模す）: riskmodel のみを選択
+  // （testquality を選択から外す）
+  writeAssessment(['riskmodel']);
+  runPlanCli(dir, ['plan']);
+  const plan2 = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+
+  assert.ok(
+    plan2.effectiveAngles.includes('testquality'),
+    'testquality の incomplete 義務は再assessmentで選択から外れても必須集合から落ちない',
+  );
+  const tqEntry2 = plan2.entries.find((e) => e.angle === 'testquality');
+  assert.ok(tqEntry2, 'testquality の entry 自体が消えていない（選択から外れても義務は追跡される）');
+  // run:true（自動再起動）までは期待しない — 1回目の fresh 起動で review budget（自動探索
+  // 1/1回）を既に消費しているため、2回目の自動再起動は budget 上限で止まる（legacy mode の
+  // 同種ケースと同じ既存仕様）。ここで固定するのは「義務が silent に消えない」ことで、
+  // 「自動で再起動されるべき」ではない。
+  assert.equal(tqEntry2.budgetOutcome, 'exhausted');
+  assert.match(tqEntry2.withheld.reason, /incomplete/, '保留理由に incomplete が明記される');
+  assert.ok(
+    plan2.nextActions.some((a) => a.includes('test-quality')),
+    'testquality の未解決状態が nextActions（人間判断が必要な保留）として現れる',
+  );
+  assert.equal(
+    plan2.converged,
+    false,
+    'incomplete な testquality が残る限り converged（起動義務消化完了）にならない',
+  );
+});
+
+test('CLI 結合: shadow-routing.json が無ければ `review:plan` は legacyReviewContract fallback のまま動く（既定の安全側）', (t) => {
+  const dir = makePlanRepo(t);
+  writeFileSync(join(dir, 'src.js'), 'export const a = 2;\n');
+  execFileSync('git', ['commit', '-qam', 'f1'], { cwd: dir });
+  createSnapshot({ cwd: dir, baseRef: 'main' });
+
+  runPlanCli(dir, ['plan']);
+  const snap = latestSnapshot(dir);
+  const plan = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  assert.equal(plan.routingAuthority, 'fallback');
+  assert.equal(plan.routingFallbackReason, 'missing');
+});
+
+// 敵対的レビュー2周目所見 F-A2（med・実行確認済み）: `planCommand` は2回目以降の呼び出しで
+// 必ず `state.initialTier` が確定済みになり、`buildPlan` の `initial` は
+// `computeInitialTier` を経由しない cache 分岐を通る。旧実装はこの分岐で `initial.base` が
+// 存在せず（`undefined !== null` が常に真）、docs のみ PR で空集合フロアが2回目以降つねに
+// 誤発火していた。raw な buildPlan 呼び出し＋`emptyState()`（initialTier: null）ではこの
+// cache 分岐を一度も通らないため、既存の単体テストはこの穴を検出できなかった
+// （CLI-boundary blind spot）。同じ snapshot に対して `review:plan` を2回実行し、
+// cache 分岐でも空集合フロアが誤発火しないことを固定する。
+test('CLI 結合（敵対的レビュー2周目所見 F-A2）: docs のみ PR で `review:plan` を2回実行しても（state.initialTier cache 後も）空集合フロアは誤発火しない', (t) => {
+  const dir = makePlanRepo(t);
+  mkdirSync(join(dir, 'docs'), { recursive: true });
+  writeFileSync(join(dir, 'docs/notes.md'), '# notes\n');
+  execFileSync('git', ['add', 'docs/notes.md'], { cwd: dir });
+  execFileSync('git', ['commit', '-qm', 'docs only'], { cwd: dir });
+  createSnapshot({ cwd: dir, baseRef: 'main' });
+
+  const snap = latestSnapshot(dir);
+  writeFileSync(
+    join(snap.dir, 'shadow-routing.json'),
+    `${JSON.stringify({
+      version: 1,
+      snapshotId: snap.snapshotId,
+      valid: true,
+      shadowFailure: null,
+      selection: {
+        selectedAngles: [],
+        conditionalAngles: [],
+        escalatedAngles: [],
+        selectedSidecars: [],
+      },
+    })}\n`,
+  );
+
+  runPlanCli(dir, ['plan']); // 1回目: state.initialTier 未確定 → computeInitialTier 経由
+  const planFirst = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  assert.equal(
+    planFirst.routingAuthority,
+    'authority',
+    '前提: 1回目は docsOnly の空集合をそのまま正当な縮小として採用する',
+  );
+
+  runPlanCli(dir, ['plan']); // 2回目: state.initialTier が cache 済み（reclassifyTier 経由）
+  const planSecond = JSON.parse(readFileSync(join(snap.dir, 'review-plan.json'), 'utf-8'));
+  assert.equal(
+    planSecond.routingAuthority,
+    'authority',
+    '2回目（cache 分岐）でも docsOnly の空集合フロア不発火は変わらない（F-A2 の再現防止）',
+  );
+  assert.deepEqual(planSecond.effectiveAngles, []);
+});
+
+// spec レビュー所見（実行確認済みの回帰）: authority mode の effectiveAngles は
+// selectedAngles ∪ escalatedAngles だけで決まり state.addedAngles を参照しない。
+// `escalate --angles memory` は memory を通常 angle へ型変換しないため deriveEscalatedAngles が
+// 除外し、`memoryRequired` を経由しない限り memory レビュー義務が authority mode でだけ消える
+// （legacy fallback では state.addedAngles 経由でたまたま残っていた）。
+test('authority mode: escalate --angles memory（hit 無し）でも記憶適合レビュー義務が消えない', () => {
+  const state = lightState();
+  escalateAngles(state, { angles: ['memory'], reason: '記憶適合だけ再確認したい' });
+  assert.equal(state.memoryRequired, false, '前提: memoryRequired 自体は escalate では立たない');
+
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.ok(
+    plan.entries.some((e) => e.angle === 'memory'),
+    'memory の entry が authority mode でも生成される（escalatedAngles には入らないが、' +
+      'deriveMemoryConditional 経由で必ず反映する）',
+  );
+  assert.ok(
+    !plan.escalatedAngles.includes('memory'),
+    'memory は conditional kind のまま — escalatedAngles（通常 angle overlay）へは型変換しない',
+  );
+});
+
+// 外部レビュー Codex 指摘 P2: formatPlan は effectiveAngles（selectedAngles ∪ escalatedAngles の
+// 和集合）をそのまま「selectedAngles:」としてラベル付けしていたため、router が選ばなかった
+// manual escalation 由来の角度まで router 自身が選んだように表示され、routing-miss の
+// 振り返りで provenance を取り違える。semanticSelectedAngles（router の生の選択）を分離した。
+test('authority mode: formatPlan は router の生の selectedAngles と escalation 由来の角度を混同表示しない', () => {
+  const state = lightState();
+  escalateAngles(state, { angles: ['quality'], reason: '外部レビューで見逃しが判明' });
+
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    // router 自身は riskmodel のみを選択（quality は選んでいない）
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.deepEqual(plan.semanticSelectedAngles, ['riskmodel'], 'router の生の選択を別フィールドで保持する');
+  assert.deepEqual(new Set(plan.effectiveAngles), new Set(['riskmodel', 'quality']));
+
+  const text = formatPlan(plan, null);
+  const line = text.split('\n').find((l) => l.includes('routing authority:'));
+  const selectedSegment = /selectedAngles: ([^／]*)／/.exec(line)?.[1] ?? '';
+  assert.ok(selectedSegment.includes('riskmodel'), 'router が実際に選んだ riskmodel は表示される');
+  assert.ok(!selectedSegment.includes('quality'), 'quality は selectedAngles 側の表示に混入しない');
+  assert.match(line, /escalated: quality/, 'quality は escalated 側にのみ現れる');
+});
+
+// #645: Artifacts Gate へ actual execution obligation を運ぶための receipt フィールド。
+test('#645 authority receipt: plan.headSha は snapshot manifest の headSha をそのまま運ぶ', () => {
+  const state = lightState();
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest({ headSha: 'a'.repeat(40) }),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.equal(plan.headSha, 'a'.repeat(40));
+});
+
+test('#645 authority receipt: manifest に headSha が無い場合 plan.headSha は null（束縛不能を明示）', () => {
+  const state = lightState();
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.equal(plan.headSha, null);
+});
+
+test('#645 authority receipt: memory conditional は plan.conditionalAngles に kind を保ったまま反映される', () => {
+  const state = lightState();
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    memoryHits: 1,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.deepEqual(plan.conditionalAngles, ['memory']);
+  assert.ok(
+    !plan.effectiveAngles.includes('memory'),
+    'memory は通常 angle（effectiveAngles）へ混入しない',
+  );
+});
+
+test('#645 authority receipt: formatAuthorityReceipt は effective に selected/escalated/incomplete-retained の和を運ぶ', () => {
+  const state = lightState();
+  escalateAngles(state, { angles: ['operability'], reason: 'テスト用エスカレーション' });
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest({ headSha: 'c'.repeat(40) }),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel', 'testquality'], selectedSidecars: [] },
+  });
+  const line = formatAuthorityReceipt(plan);
+  assert.equal(
+    line,
+    `Authority receipt: v1 head=${'c'.repeat(40)} authority=authority ` +
+      'selected=riskmodel,testquality escalated=operability conditional=- ' +
+      'effective=riskmodel,testquality,operability sidecars=-',
+  );
+});
+
+test('#645 authority receipt: fallback mode では selected/escalated が空でも effective は legacyAngles を運ぶ', () => {
+  const state = lightState();
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest({ headSha: 'd'.repeat(40) }),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: null, // missing assessment → legacyReviewContract fallback
+  });
+  assert.equal(plan.routingAuthority, 'fallback');
+  const line = formatAuthorityReceipt(plan);
+  assert.match(line, /authority=fallback/);
+  assert.match(line, /selected=-/);
+  // fallback 時の effective は legacyAngles（Light 相当）— receipt があっても
+  // check-artifacts 側は fallback を見た時点で無条件に legacy Tier 必須集合を使うため、
+  // ここでは「plan 自身が生成する値が閉じた語彙のままである」ことだけ確認する
+  assert.ok(plan.effectiveAngles.length > 0);
+});
+
+test('§14 AA: authority mode の escalatedAngles は manual-escalation 由来のみを反映し、同一 attempt 内に混在する tier-reclassification 由来は含めない', () => {
+  const state = lightState();
+  escalateAngles(state, { angles: ['operability'], reason: '外部レビューで見逃しが判明' });
+  // legacy runtime の実行時事実（widenEffectiveTier は escalateAngles/reclassifyTier の両方から
+  // 呼ばれ、どちらの経路でも state.addedAngles を無差別に更新する）を、reclassifyTier のファイル
+  // 判定条件を満たす fixture を作らずに直接再現する。目的は provenance 区別（kind）そのものの
+  // 検証であって、reclassifyTier のトリガー条件ではない。
+  state.escalations.push({
+    seq: 99,
+    kind: 'tier-reclassification',
+    angles: ['spec'],
+    reason: '設計文書検知',
+    effectiveTier: state.effectiveTier,
+  });
+  state.addedAngles.push('spec');
+
+  const changed = [file('src/lib/writingRules.js')];
+  const plan = buildPlan({
+    state,
+    manifest: manifest(),
+    changedFiles: changed,
+    changedInFix: changed,
+    routing: { authority: 'authority', selectedAngles: ['riskmodel'], selectedSidecars: [] },
+  });
+  assert.deepEqual(
+    plan.escalatedAngles,
+    ['operability'],
+    'tier-reclassification 由来（spec）は escalatedAngles へ持ち越さない（§4.1/§9/§15.4）',
+  );
+  assert.deepEqual(
+    new Set(plan.effectiveAngles),
+    new Set(['riskmodel', 'operability']),
+    'authority の effectiveAngles = selectedAngles ∪ escalatedAngles（manual-escalation のみ）。' +
+      'spec（tier-reclassification 由来）は含めない',
+  );
+  // legacy 側（state.addedAngles）は両 kind を無差別に蓄積したまま — v2 の provenance 区別は
+  // legacy runtime の書き込み方を変更しない（shadow 側と同じ制約。§15.1）
+  assert.ok(state.addedAngles.includes('operability') && state.addedAngles.includes('spec'));
+});
+
+test('deriveEscalatedAngles（review-plan.js 経由）と deriveShadowEscalatedAngles（shadow-routing.js 経由）は同じ入力に常に同じ結果を返す（両者は review-angle-tokens.js の同一実装の re-export。将来どちらかが独自実装へ再分岐する回帰を検出する）', () => {
+  const fixtures = [
+    { escalations: [{ seq: 1, kind: 'manual-escalation', angles: ['operability'] }] },
+    {
+      escalations: [
+        { seq: 1, kind: 'manual-escalation', angles: ['operability'] },
+        { seq: 2, kind: 'tier-reclassification', angles: ['spec'] },
+      ],
+    },
+    { escalations: [{ seq: 1, kind: 'manual-escalation', angles: ['memory', 'quality'] }] },
+    { escalations: [] },
+    {
+      escalations: [
+        { seq: 1, kind: 'manual-escalation', angles: 'not-an-array' },
+        {
+          seq: 2,
+          kind: 'manual-escalation',
+          angles: ['__proto__', 'constructor', 'unknown-angle', 'cleanup'],
+        },
+      ],
+    },
+    {},
+  ];
+  for (const state of fixtures) {
+    assert.deepEqual(
+      [...deriveEscalatedAngles(state)].sort(),
+      [...deriveShadowEscalatedAngles(state)].sort(),
+      `fixture: ${JSON.stringify(state)}`,
+    );
+  }
 });
 
 test('discardLegacyFindingArtifacts: 旧 plan が書いた findings.json を snapshot ディレクトリから消す（外部レビュー Codex 指摘）', (t) => {
@@ -3424,6 +4267,27 @@ test('loadState: runs の snapshotId が非文字列の記録は fail-loud（fai
   });
   writeFileSync(file2, JSON.stringify(state));
   assert.throws(() => loadState(dir), /snapshotId は非空の文字列/);
+});
+
+// 外部レビュー Codex 指摘: escalations[].angles が配列でない記録（部分的に破損・手動復旧された
+// state.json を想定）を loadState が受理すると、deriveEscalatedAngles の
+// `!Array.isArray(e.angles)` ガードが fail-loud にせず黙って記録全体を読み飛ばす。authority
+// mode は legacy の state.addedAngles を参照しないため、この silent drop がそのまま
+// エスカレーションした系統の義務消失に直結する。
+test('loadState: escalations の angles が配列でない記録は fail-loud（manual escalation の黙殺を防ぐ）', (t) => {
+  const dir = makeStateDir(t);
+  const file2 = stateFile(dir);
+  mkdirSync(dirname(file2), { recursive: true });
+  const state = emptyState();
+  state.escalations.push({
+    seq: 1,
+    kind: 'manual-escalation',
+    angles: 'operability', // 破損: 配列であるべきが文字列
+    reason: null,
+    effectiveTier: 'Light',
+  });
+  writeFileSync(file2, JSON.stringify(state));
+  assert.throws(() => loadState(dir), /angles は配列である必要があります/);
 });
 
 test('loadState: tierWidenedSeq が整数でない state は fail-loud（恒久ループを作らない）', (t) => {

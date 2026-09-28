@@ -35,6 +35,8 @@ JavaScript action の inputs は GitHub が `INPUT_<NAME 大文字・空白→_�
 |---|---|---|---|---|
 | `changed-files` | ✅ required | `INPUT_CHANGED-FILES` | `CHANGED_FILES` | `base...HEAD` の変更ファイル一覧（改行区切り。空白はファイル名の一部として扱う。0件なら空文字列）。分類（code/docs/dep）に使う。 |
 | `pr-body` | 任意（`default: ''`） | `INPUT_PR-BODY` | `PR_BODY` | 検査対象の PR 本文。`pull_request.edited` を含め最新本文を渡すこと。 |
+| `pr-number` | ✅ required | `INPUT_PR-NUMBER` | `PR_NUMBER` | 証明行（proof line）に埋め込む PR 番号。 |
+| `head-sha` | ✅ required | `INPUT_HEAD-SHA` | `HEAD_SHA` | 証明行に埋め込む head SHA、および **Authority receipt（#645）の head 束縛検証に使う trusted な現在の PR head**。`github.event.pull_request.head.sha` を渡すこと。PR 本文に authority routing execution receipt（`Authority receipt: v1 head=... authority=... ...`）があるとき、この値と receipt の `head=` が一致する場合のみ receipt の `effective` を必須系統の正として採用する。不一致（stale）・receipt 無し・`authority=fallback` のいずれでも legacy Tier の必須系統へ安全側フォールバックする（詳細: `scripts/agent/check-artifacts.js` の `resolveAuthorityReceipt`）。 |
 
 **`changed-files` はなぜ required か**: JavaScript action の `INPUT_<NAME>` 環境変数は、`default`
 未設定の optional input でも「呼び出し側が指定しなかった」場合に**空文字列で設定される**
@@ -48,6 +50,45 @@ JavaScript action の inputs は GitHub が `INPUT_<NAME 大文字・空白→_�
 
 PR 本文はシェルへ展開されず env で渡るため script injection の心配がない。呼び出し例は
 `.github/workflows/artifacts-gate.yml`（`uses: ./.github/actions/artifacts-gate` + `with:`）を参照。
+
+## Authority receipt（#645）
+
+Phase 5 §15.4 authority switch により `review:plan` が semantic routing で legacy Tier より
+狭い reviewer 集合を選ぶ場合、Artifacts Gate が legacy `TIER_ANGLES` を再要求すると削減効果が
+相殺される。これを解消するため、`review:plan` は actual execution obligation
+（`selectedAngles ∪ escalatedAngles ∪ incomplete/error anti-skip` = `effectiveAngles`）を
+現在の PR head に束縛した1行の execution receipt として出力し
+（`node scripts/agent/review-plan.js plan` の stdout。正本: `scripts/agent/review-plan.js`
+`formatAuthorityReceipt()`）、PR 本文の「レビューループ記録」セクションへ貼り付ける。
+
+```text
+Authority receipt: v1 head=<40桁hex> authority=authority|fallback selected=<系統,...|-> escalated=<...> conditional=<...> effective=<...> sidecars=<...>
+```
+
+Artifacts Gate（`scripts/agent/check-artifacts.js` の `resolveAuthorityReceipt`）はこの receipt
+を検証するだけの consumer であり、selectedAngles・escalation overlay・incomplete/error
+anti-skip を再計算しない。確認するのは: 閉じた文法・閉じた語彙、`effective ⊇
+selected/escalated` の internal invariant、`head-sha` input との一致（stale なら不採用）、
+コード変更なのに `effective` が空集合という組み合わせ（forged 縮小の兆候。`sidecars` は
+machine-tracked obligation ではないため判定に含めない — 敵対的レビュー所見: `sidecars` を
+判定に含めると、そこへ何か値を1つ入れるだけで floor を回避できてしまう）の排除、の4点のみ。
+`effective` を legacy Tier 必須系統の代わりに採用するのは、receipt が存在し・
+閉じた文法/語彙に適合し・`authority=authority` を宣言し・head が一致し・空集合floorを通過した
+場合だけである。receipt 無し・`authority=fallback` 宣言・stale（head 不一致）は legacy Tier の
+必須系統へ**安全側フォールバックする**（action は成功し、誤検出はしない）。一方
+**malformed（受理文法外・閉じた語彙外・競合宣言・internal invariant 違反）は fallback ではなく
+fail-loud になる**——`resolveAuthorityReceipt()` はこれらを `errors` として返し、action は
+失敗する（Codex 指摘: #646。「宣言なし」に静かに倒れて安全側で成功する経路とは異なり、
+壊れた receipt を残したまま気づかず PR を進めることを防ぐ意図的な設計）。**PR 本文に「実効Tier:」宣言（legacy 専用の
+widen-only 手動加算）がある場合は、receipt が有効でもその必須系統を receipt の `effective` との
+和集合として維持する**（敵対的レビュー所見 ADV-1: 実効Tier は著者がこの PR 本文内で今まさに
+表明した意思であり、head が一致する receipt であっても黙って上書きしない）。
+
+selectedAngles 自体の意味的妥当性（router の判定が正しいか、receipt の `effective` が本当に
+必要十分な集合か）は Artifacts Gate の責務外（`docs/planning/review-system-phase5-plan.md`
+§2.2）。receipt は通常 `review:plan` が生成した値をそのまま貼るためのものであり、legacy
+`Tier: Light` 等の自己申告が今も検証されないのと同じ信頼水準で、手書きで縮小した receipt を
+機械的に見抜くことはできない（防御は evidence-check・人間レビュー側が担う）。
 
 ## dist の更新方法
 

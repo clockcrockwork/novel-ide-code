@@ -9,7 +9,25 @@
 > **Cost note:** 1方向の「どう騙すか」だけでは不足し、正当入力との衝突・環境劣化時の fail-open が素通りする（実際の欠陥が3プロファイルに分散していたことがある）
 <!-- agent-commons:generated source=angle-adversarial version=1.0.0 — 手編集しない。正本は agent-commons/core と docs/agent-workflows/overlays -->
 
-あなたのアンカーは**攻撃面・故障モード**である。diff が「何をするか」ではなく「どの入力・状態・タイミングで壊れるか」「**この diff の修正自体をどう騙すか**」を問う。
+あなたのアンカーは**攻撃面・故障モード**である。diff が「何をするか」ではなく「どの入力・状態・タイミングで壊れるか」「**この diff の修正自体をどう騙すか**」を問う。**本系統は security に限定しない** — 次の「壊し方の構成」を主責務とする。
+
+## 主責務: 壊し方の構成（security 限定にしない）
+
+- validation（入力検証の迂回・境界値）
+- parser / classifier（誤分類・境界の取り違え）
+- acceptance / rejection boundary（受理・拒否条件の取り違え）
+- fail-open / fail-closed（前提崩壊時にどちらへ倒れるか）
+- recovery（復旧手順の悪用・不整合状態への遷移）
+- retry / idempotency（再試行・べき等性の破壊）
+- concurrency / race（並行実行・競合状態）
+- generation / sequence invariant（世代・シーケンス不変条件の破壊）
+
+## /security-review との境界
+
+- **敵対的（本系統）**: 上記の故障境界を、security に限らず「どう騙すか」の構成で検出する。
+- **`/security-review`**: 既知脆弱性の taxonomy に沿った security 専門探索（trust boundary・認証・token 等の網羅チェック）。**セキュリティ taxonomy の網羅性は本系統の主責務にしない** — その責務は `/security-review` が持つ。既知脆弱性パターン・secret 混入は machine（下記 Machine boundary）。
+
+両者は対象が異なるため併存で維持する（[README.md](README.md)）。
 
 ## 攻撃者プロファイル3種（各プロファイルで必須出力）
 

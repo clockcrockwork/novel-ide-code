@@ -276,6 +276,29 @@ test('manifest に included / excluded の全一覧を出力する（目視レ�
   }
 });
 
+test('Dependabot 設定は public tree に出さず manifest の excluded に載る（control-only ファイル。#347 / #345）', () => {
+  const { src, out, cleanup } = tmpDirs();
+  try {
+    const runGit = mockGit({
+      toplevel: resolve(src),
+      treeStr: tree([
+        ['100644', 'a1', 'src/index.js'],
+        ['100644', 'a2', '.github/dependabot.yml'],
+        ['100644', 'a3', '.github/workflows/ci.yml'],
+      ]),
+      blobs: { a1: 'code', a2: 'version: 2', a3: 'on: pull_request' },
+    });
+    const r = buildPublicTree({ sourceRepo: src, outDir: out, runGit });
+    const manifest = JSON.parse(readFileSync(r.manifestPath, 'utf-8'));
+    assert.deepEqual(manifest.included, ['src/index.js', '.github/workflows/ci.yml']);
+    assert.deepEqual(manifest.excluded, ['.github/dependabot.yml']);
+    assert.equal(existsSync(join(out, '.github/dependabot.yml')), false);
+    assert.equal(existsSync(join(out, '.github/workflows/ci.yml')), true);
+  } finally {
+    cleanup();
+  }
+});
+
 test('manifest が public tree 内を指すと rename 前に拒否し出力を残さない（PR #458 Codex 指摘2）', () => {
   const { src, out, cleanup } = tmpDirs();
   try {

@@ -159,7 +159,7 @@ node scripts/agent/review-plan.js escalate --angles spec,adversarial --reason "�
 
 実装後、コミット前に以下を順に実行する：
 
-1. **観点別レビュー**（[review-angles/README.md](review-angles/README.md) を正とする）— `npm run review:snapshot` → `npm run review:plan` で Tier（加算式: 実行可能設計文書に触れる変更は仕様＋運用性・状態遷移を加算）・実効 Tier・起動系統・レビューモード（所見確認／差分探索／全体再探索）・fresh/継続を確定し、対象系統のレビュアー（`review-subtractive` / `review-riskmodel` / `review-spec` / `review-adversarial` / `review-quality` / `review-operability` / `review-cleanup`）を起動する。**減算は先に起動し、清掃は他系統が収束した最終1周のみ起動する**。ステップ3.6 で実効 Tier が上がっている場合は加算された系統も対象に含める。記憶適合（条件起動）の起動条件・記録方法は [review-angles/README.md](review-angles/README.md)「条件起動系統」を正本とする。指摘があれば修正する。
+1. **観点別レビュー**（[review-angles/README.md](review-angles/README.md) を正とする）— `npm run review:snapshot` → `npm run review:plan` で Tier（加算式: 実行可能設計文書に触れる変更は仕様＋運用性・状態遷移を加算）・実効 Tier・起動系統・レビューモード（所見確認／差分探索／全体再探索）・fresh/継続を確定し、対象系統のレビュアー（`review-subtractive` / `review-riskmodel` / `review-spec` / `review-adversarial` / `review-quality` / `review-operability` / `review-cleanup`）を起動する。**減算は先に起動し、清掃は他系統が収束した最終1周のみ起動する**。ステップ3.6 で実効 Tier が上がっている場合は加算された系統も対象に含める。記憶適合（条件起動）の起動条件・記録方法は [review-angles/README.md](review-angles/README.md)「条件起動系統」を正本とする。**test-quality（`testquality`）は本ステップの Tier ベースの必須起動対象には含まれない**（`ANGLE_TOKENS` への canonical registry 登録と Tier 表の必須系統への追加は独立した決定であり、前者は本ステップの起動対象を変えない。testquality の実際の起動は consumer 側の authority routing が semantic assessment に基づき選択した場合のみ。[review-angles/README.md](review-angles/README.md)「testquality: canonical 系統定義と activation の分離」）。指摘があれば修正する。
 2. `/security-review` — セキュリティ脆弱性（XSS・インジェクション・情報漏洩等）を確認。指摘があれば修正する（敵対的系統と併存で維持）。
 
 いずれも**新規所見ゼロを観測するまで**修正と再実行を行い、周回・系統ごとに1行の「レビューループ記録」を残す（ただし [review-angles/README.md](review-angles/README.md)「review budget」の枠を超えて自動で新規探索を続けず、人間判断へ返す）（収束条件・周回上限・表フォーマット（系統列込み）は [pre-commit-review.md](pre-commit-review.md) ステップ6 を正とする。ステップ9 のループと合算して1つの表でよい）。
@@ -176,8 +176,8 @@ node scripts/agent/review-plan.js escalate --angles spec,adversarial --reason "�
 
 ステップ7の収束（新規所見ゼロ）後に、[review-retrospective.md](review-retrospective.md) を正本として実行する。
 
-- **対象**: GitHub 上のレビューコメント（外部レビュアー・別モデル・別セッション）で初めて発見された正当な新規指摘（✅）のうち、バグ・回帰・セキュリティ等の影響と再発可能性・内部捕捉可能性があるもの。分析対象の入力は `## 対応履歴` の表（＝外部レビュー由来）に限る。内部の観点別レビュー所見は別セクション（`## 内部レビュー所見の裁定`）にあり、振り返りの目的は「内部で捕捉できなかった理由の分析」なので分析対象ではない — 内部所見は分析の**参照側**として使う。対象選別の判定表は正本を参照。
-- **実施者**: 実装・修正コンテキストを持たないサブエージェント `review-retrospective`（`.claude/agents/review-retrospective.md`）を起動し、発生原因・内部検出漏れ原因（本来の捕捉工程と通過理由）・再発防止を分析させる。**当該ラウンドの確定済みトリアージ表（ステップ4〜5の結果。この時点ではまだファイル未反映）はメインセッションが起動時に入力として渡す**（渡さないと、サブエージェントは `docs/pr/PR-{番号}.md` に過去ラウンドしか見つけられない）。分析結果はステップ8で `docs/pr/PR-{番号}.md` の `## レビュー振り返り` セクションへ転記する。
+- **対象**: GitHub 上のレビューコメント（外部レビュアー・別モデル・別セッション）または既存の独立 review gate（最終独立レビュー〔上記「唯一の例外」〕・high-risk second opinion 等）で確認された、内部の観点別レビュー・machine gate から escape した正当な新規指摘（✅）のうち、バグ・回帰・セキュリティ等の影響と再発可能性・内部捕捉可能性があるもの。通常の観点別レビューが既に Actionable として捕捉済みで単に未修正なだけの内部所見（`## 内部レビュー所見の裁定`）は、内部で捕捉できなかった理由を判定するための**参照側**として使う（分析対象そのものではない）。対象選別の判定表（由来: external first-found／aggregation rediscovery／independent first-found の3経路）は正本を参照。
+- **実施者**: 実装・修正コンテキストを持たないサブエージェント `review-retrospective`（`.claude/agents/review-retrospective.md`）を起動し、発生原因・内部検出漏れ原因（本来の捕捉工程と通過理由）・再発防止を分析させる。**当該ラウンドの確定済みトリアージ表（ステップ4〜5の結果。この時点ではまだファイル未反映）はメインセッションが起動時に入力として渡す**（渡さないと、サブエージェントは `docs/pr/PR-{番号}.md` に過去ラウンドしか見つけられない）。**最終独立レビュー（上記「唯一の例外」）を実施済みの場合は、その所見も同様に入力として渡す**（[review-retrospective.md](review-retrospective.md)「入力の受け渡し」が要求する第3の入力。independent first-found（(c)）由来の escaped finding はこれが無いと分析対象を特定できない）。**high-risk second opinion 由来の所見が対象にありうる場合は、PR 本文の `## セカンドオピニオン記録` も同様に入力として渡す**（サブエージェントは PR 本文を自動取得できない）。分析結果はステップ8で `docs/pr/PR-{番号}.md` の `## レビュー振り返り` セクションへ転記する。
 - **該当なしの場合**: 対象が0件なら宣言・記録は不要（機械ゲートの対象外。該当ゼロの報告成果物を作らない）。
 
 ### 8. docs/pr/PR-{番号}.md の更新（条件付き作成）

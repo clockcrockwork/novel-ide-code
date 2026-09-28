@@ -10,6 +10,8 @@ import {
   TIER_ANGLES,
   DESIGN_ADDON_ANGLES,
   TIER_DECL_NAMES,
+  formatAngleList,
+  parseAngleList,
 } from '../scripts/agent/review-angle-tokens.js';
 import {
   classify,
@@ -42,7 +44,9 @@ test('条件起動系統: CONDITIONAL_ANGLE_TOKENS が ANGLE_TOKENS と重複せ
   for (const [key, def] of Object.entries(CONDITIONAL_ANGLE_TOKENS)) {
     assert.ok(
       !(key in ANGLE_TOKENS),
-      `条件起動系統「${key}」が ANGLE_TOKENS と重複している（Full = ANGLE_TOKENS 全キーの不変条件を壊すため分離を維持すること）`,
+      `条件起動系統「${key}」が ANGLE_TOKENS と重複している（条件起動系統は通常 angle と種別が異なる` +
+        `ため分離を維持すること。Full = ANGLE_TOKENS 全キーの不変条件は Phase 5 §15.4 で既に撤去済み` +
+        `で、分離を要求する理由ではない）`,
     );
     assert.ok(
       README.includes(def.label),
@@ -70,10 +74,23 @@ test('条件起動系統: CONDITIONAL_ANGLE_TOKENS の accept 文字列が ANGLE
 });
 
 test('#452/Phase2: TIER_ANGLES の構成が README の Tier 定義と一致する', () => {
-  // Full = 7系統すべて（減算＋既存5系統＋清掃） / Light = 減算＋敵対的＋risk-model＋品質＋清掃 /
+  // Full = legacy 7系統（減算＋既存5系統＋清掃） / Light = 減算＋敵対的＋risk-model＋品質＋清掃 /
   // 設計文書 = 減算＋仕様＋運用性＋清掃（docs のみ mandate の基礎値。加算分 DESIGN_ADDON_ANGLES とは別）/
   // Record = 減算＋清掃 / Docs = 清掃のみ
-  assert.deepEqual(new Set(TIER_ANGLES.Full), new Set(Object.keys(ANGLE_TOKENS)));
+  //
+  // Phase 5 §15.4 authority switch: 「Full = ANGLE_TOKENS 全キー」の不変条件は明示的に撤去した
+  // （testquality を ANGLE_TOKENS へ登録した一方、legacyReviewContract の構成要素である Full は
+  // switch 前の7系統リテラルのまま凍結する）。したがって Full は ANGLE_TOKENS 全キーとの
+  // deepEqual ではなく、switch 前から変わらない明示リテラル集合と比較する。
+  assert.deepEqual(
+    new Set(TIER_ANGLES.Full),
+    new Set(['subtractive', 'riskmodel', 'spec', 'adversarial', 'quality', 'operability', 'cleanup']),
+  );
+  assert.ok(
+    !TIER_ANGLES.Full.includes('testquality'),
+    'legacy Full は testquality を含めない（凍結した pre-switch policy の意味を変えないため。' +
+      'canonical registry 登録〔ANGLE_TOKENS〕と Tier 必須系統への追加は独立した決定）',
+  );
   assert.deepEqual(
     new Set(TIER_ANGLES.Light),
     new Set(['subtractive', 'riskmodel', 'adversarial', 'quality', 'cleanup']),
@@ -166,4 +183,14 @@ test('Phase2: angle-subtractive.md と angle-cleanup.md の「モード判定」
     extractModeSection(cleanup),
     'angle-subtractive.md と angle-cleanup.md の「モード判定」セクションが乖離した（両ファイルとも同一内容に保つ）',
   );
+});
+
+// #645: review-plan.js（生成）と check-artifacts.js（検証）が共有する authority receipt の
+// 「空集合表現」規約。どちらか一方だけ規約が変わると receipt の空リストが誤って非空・逆に非空が
+// 空と解釈される（生成側と検証側の暗黙契約が乖離する）ため、round-trip で固定する。
+test('#645 formatAngleList/parseAngleList: 空集合は "-"、非空はカンマ区切りで round-trip する', () => {
+  assert.equal(formatAngleList([]), '-');
+  assert.deepEqual(parseAngleList('-'), []);
+  assert.equal(formatAngleList(['riskmodel', 'testquality']), 'riskmodel,testquality');
+  assert.deepEqual(parseAngleList('riskmodel,testquality'), ['riskmodel', 'testquality']);
 });

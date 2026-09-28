@@ -49,7 +49,7 @@
 ### 発見経路
 
 - **CI audit ジョブ**（`.github/workflows/ci.yml` の `audit` ジョブ）が PR ごとに `--audit-level=high` で high/critical を検出する
-- **Dependabot**（`.github/dependabot.yml`）が週次で依存パッケージの脆弱性アラートを発行する
+- **Dependabot**: 依存パッケージの脆弱性は Dependabot alerts（リポジトリ設定）で検出する。依存更新 PR は非公開の control リポジトリの `.github/dependabot.yml` で週次生成し、public ミラーには同設定を含めない（依存更新は control リポジトリで評価・適用してから反映する）
 - **手動確認**: `npm audit --omit=dev` / `cd worker && npm audit --omit=dev`
 
 ### 対応方針
@@ -57,8 +57,8 @@
 | 深刻度 | 対象 | 対応方針 |
 |--------|------|---------|
 | Critical / High | production deps | 即時対応。fix available なら `npm update` で修正。fix なければ代替パッケージを検討 |
-| Moderate | production deps | Dependabot PR が来たらレビューして取り込む |
-| High / Moderate | dev deps のみ | バックログ管理。Dependabot PR でまとめて対応 |
+| Moderate | production deps | control リポジトリの Dependabot PR でレビューして取り込む |
+| High / Moderate | dev deps のみ | バックログ管理。control リポジトリの Dependabot PR でまとめて対応 |
 | Low | 全て | 記録のみ |
 
 production/dev の判定：`npm audit --omit=dev` で検出されるものが production に影響あり。
@@ -87,6 +87,6 @@ production/dev の判定：`npm audit --omit=dev` で検出されるものが pr
 public repo 化に備えた GitHub Actions のサプライチェーン強化方針。詳細・運用手順は [docs/SUPPLY_CHAIN.md](../docs/SUPPLY_CHAIN.md) 「public repo 化前の GitHub Actions hardening 方針」を正とする。
 
 - **permissions**: トップレベル `contents: read` をデフォルトとする。job 単位で必要最小限のみ昇格。
-- **Action SHA pin**: third-party action は full-length commit SHA pin 必須。公式 action も SHA pin する。元タグは `uses:` 末尾コメントに残し、更新は Dependabot/手動で SHA を差し替える。
+- **Action SHA pin**: third-party action は full-length commit SHA pin 必須。公式 action も SHA pin する。元タグは `uses:` 末尾コメントに残し、更新は control リポジトリの Dependabot / 手動で SHA を差し替える。
 - **`pull_request_target` 原則禁止**: CI は `pull_request` を使う。例外時は外部 PR コードの checkout/実行・Secrets 露出をしない（詳細は SUPPLY_CHAIN.md）。
 - npm publish / Trusted Publishing / npm token 管理は対象外（publish 予定なし）。

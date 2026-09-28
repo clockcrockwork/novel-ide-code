@@ -31,7 +31,7 @@
 # クォートして出力し、そのまま manifest の生パス文字列と比較すると diff が常に非0件になる
 # （JS 側は非 ASCII パスを invalid-path として拒否するため manifest 側には元々出現しないが、
 # 出力形式を揃えておくこと自体が diff 比較の前提。ラウンド4敵対的4）
-git -c core.quotePath=false ls-files --full-name -- ':/' | grep -viE '^(docs/pr/|docs/pr-analysis/|docs/planning/|docs/agent-memory/records/)' | sort > /tmp/public-expected.txt
+git -c core.quotePath=false ls-files --full-name -- ':/' | grep -viE '^(docs/pr/|docs/pr-analysis/|docs/planning/|docs/agent-memory/records/|\.github/dependabot\.ya?ml$)' | sort > /tmp/public-expected.txt
 
 # build-public-tree.js が出力した manifest.json（--manifest で指定したパス）の included と比較する。
 # 差分が出れば blocking——0件のはずが差分ありなら shell 側のパターン漏れか JS 側の判定漏れの
@@ -52,10 +52,11 @@ diff /tmp/public-expected.txt /tmp/public-actual.txt; echo "exit=$?"
 | `docs/pr-analysis/` | PR 分析の中間データ（`items.json` 等） |
 | `docs/planning/` | 非公開ロードマップ・上位計画（品質/AI運用/public化準備）。実施順・未決事項・AI運用方針など内部判断を含む |
 | `docs/agent-memory/records/` | 検索型永続記憶の正本レコード。判断過程・不採用理由・教訓など内部判断を含む。public 側は要約された digest（`agent-memory.js digest --visibility public`。public 側への同期は別作業）でのみ提供する。`docs/agent-memory/README.md` 自体は説明文書のため public に残す |
+| `.github/dependabot.yml` / `.github/dependabot.yaml` | 依存更新 automation の設定。public repo 自身を version update PR の発生元にしない（public は canonical からの projection で、依存更新の評価・適用は control repo の責務。public 側で生成された PR を取り込むと canonical を迂回する）。個別ファイルの除外（`CONTROL_ONLY_FILES`） |
 | `.env*`（`.env` / `.env.local` / `.envrc` 等）, `*.local` | secret。`.gitignore` 済み（[5](#5-env--api-key--local-設定-除外確認) で不在を再確認）。そもそも tracked されない |
 | GitHub Issues 本体 | ファイルではないが、非公開の設計判断・脆弱性議論を含むため control 側に留める（GitHub 上の操作） |
 
-> `docs/` 配下は技術ドキュメントが大半で公開して問題ないため、除外は **`docs/pr/`・`docs/pr-analysis/`・`docs/planning/`・`docs/agent-memory/records/` の 4 ディレクトリのみ**。public ツリー生成時にこの 4 ディレクトリが含まれないことを必ず確認する（[8 のチェックリスト](#8-public-化前-最終チェックリスト)）。
+> `docs/` 配下は技術ドキュメントが大半で公開して問題ないため、除外は **`docs/pr/`・`docs/pr-analysis/`・`docs/planning/`・`docs/agent-memory/records/` の 4 ディレクトリのみ**（`docs/` 外の個別ファイル除外は上表の Dependabot 設定のみ）。public ツリー生成時にこの 4 ディレクトリと Dependabot 設定が含まれないことを必ず確認する（[8 のチェックリスト](#8-public-化前-最終チェックリスト)）。
 >
 > **docs/agent-memory/ 配下の追加規則**（同じ denylist 方式内。allowlist は不採用）: **`docs` 直下の `agent-memory` セグメント（＝ `docs/agent-memory/`）配下は `.md` 以外すべて記憶レコード扱い（fail-closed）**（`isAgentMemoryRecordPath`。PR-preflight round6 F-2 で拡張子 allowlist 方式から反転——`docs/agent-memory/tmp/backup.json.bak` のような取りこぼしを塞ぐ）。`docs/agent-memory/records/` 配下は上記 4 ディレクトリの一つとして正常に除外され、それ以外の場所（root 直下・別ディレクトリ配下等）にあれば生成中止（fail-closed）。`.md`（README.md・digest.md 等の説明文書）は本規則の対象外で denylist 既定どおり public 候補になる——将来 digest を `.md` 以外の形式で出力する運用に変える場合は、その形式が本規則で記憶レコードとして拒否されることを前提に、`records/` 配下等の正規の除外パスへ出力する。round6 で追加した「basename が `agent-memory` で始まる非 `.md` は配下外でも記憶レコード扱い」という規則は **round7 N-1（High）で撤回した**——実在する `scripts/agent-memory.js`（記憶 CLI 本体）を誤検出し、`build-public-tree.js` が生成を必ず中止する fail-open な副作用を持っていたため。**既知の残余リスク（意図的に検知しない・作らない運用で担保）**: `docs` 直下以外に置かれた `agent-memory` という名前のディレクトリ（例: `docs/ai/agent-memory/`・root 直下の `agent-memory/`）や `docs/agent-memory-old/` のような類似名ディレクトリは本規則で検知しない。
 >
@@ -71,7 +72,7 @@ diff /tmp/public-expected.txt /tmp/public-actual.txt; echo "exit=$?"
 | テスト | `tests/`, `e2e/`, 各 `__tests__/` |
 | ビルド・補助 | `public/`, `scripts/`, `index.html` |
 | 設定 | `package.json`, `package-lock.json`, `vite.config.*`, `eslint.config.*`, `vitest.config.*`, `playwright.config.*`, `.prettierrc*`, `knip.*`, `.jscpdrc.json`, `.dependency-cruiser.*`, `tsconfig*.json`, `vercel.json` |
-| CI / GitHub | `.github/workflows/`, `.github/dependabot.yml`, `.github/SECURITY.md`, `.github/pull_request_template.md`, `.github/ISSUE_TEMPLATE/`, `.github/copilot-instructions.md` |
+| CI / GitHub | `.github/workflows/`, `.github/SECURITY.md`, `.github/pull_request_template.md`, `.github/ISSUE_TEMPLATE/`, `.github/copilot-instructions.md` |
 | secret scan 設定 | `.gitleaks.toml`, `.gitignore` |
 | MCP 設定 | `.mcp.json`（playwright のみ。token を含まないことを [5](#5-env--api-key--local-設定-除外確認) で確認） |
 | エージェント定義 | `.agents/`（`CLAUDE.md` 等から参照）, `.claude/`（`settings.local.json` は `.gitignore` 済で対象外） |
@@ -167,7 +168,7 @@ Gitleaks は**secret パターン専用**で、小説本文・設計カードの
 
 ### 4-2. 除外ディレクトリの確認
 
-public ツリーに `docs/pr/`・`docs/pr-analysis/`・`docs/planning/`・`docs/agent-memory/records/` が含まれていないことを確認する。
+public ツリーに `docs/pr/`・`docs/pr-analysis/`・`docs/planning/`・`docs/agent-memory/records/` と `.github/dependabot.yml` / `.github/dependabot.yaml` が含まれていないことを確認する。
 
 ```bash
 # positive control（先に実行）: :(icase,top) パススペックが実際に一致することの確認。
@@ -181,7 +182,7 @@ git ls-files -- ':(icase,top)DOCS' | head -1
 # ':/dir' でリポジトリルート起点のパスを指定（サブディレクトリから実行しても正しく機能する）
 # :(icase,top) パススペックマジックで大文字小文字非依存に判定する（JS 側の正本 isControlOnlyPath と揃える）。
 # 判定の正本は JS 側（isControlOnlyPath。大文字小文字非依存）。この shell 例は目視確認の補助。
-git ls-files -- ':(icase,top)docs/pr' ':(icase,top)docs/pr-analysis' ':(icase,top)docs/planning' ':(icase,top)docs/agent-memory/records'; echo "exit=$?"
+git ls-files -- ':(icase,top)docs/pr' ':(icase,top)docs/pr-analysis' ':(icase,top)docs/planning' ':(icase,top)docs/agent-memory/records' ':(icase,top).github/dependabot.yml' ':(icase,top).github/dependabot.yaml'; echo "exit=$?"
 ```
 
 ### 4-3. 本文混入の探索（2 層・最終的に目視判断）
@@ -420,7 +421,7 @@ node scripts/agent-memory.js validate
 #345 実施時にそのまま使えるよう、上記を集約する。
 
 - [ ] 初期履歴は sanitized tree（新規履歴）で作成し、private 履歴を持ち込んでいない（[1](#1-public-初期履歴の方針)）
-- [ ] public ツリーを denylist 方式（全 tracked − 除外リスト）で確定し、`docs/pr/` `docs/pr-analysis/` `docs/planning/` `docs/agent-memory/records/` が含まれない（[2](#2-public-repo-に出す--出さないファイル) / [4-2](#4-2-除外ディレクトリの確認)）
+- [ ] public ツリーを denylist 方式（全 tracked − 除外リスト）で確定し、`docs/pr/` `docs/pr-analysis/` `docs/planning/` `docs/agent-memory/records/` `.github/dependabot.yml` `.github/dependabot.yaml` が含まれない（[2](#2-public-repo-に出す--出さないファイル) / [4-2](#4-2-除外ディレクトリの確認)）
 - [ ] `npm run security:secrets` が検出 0（[3](#3-secret-scan-手順gitleaks--trufflehog-不採用)）
 - [ ] strict pass（allowlist なし）が検出 0、または検出箇所が実トークンでないことを確認済み（[3](#3-secret-scan-手順gitleaks--trufflehog-不採用)）
 - [ ] フィクスチャ・docs に実作品本文・設計カードが混入していない（[4](#4-本文設計カード非公開-docs-混入確認手順)）

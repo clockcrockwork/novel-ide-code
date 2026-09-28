@@ -252,6 +252,15 @@ export const ANGLE_TRIGGERS = {
     exploreSignals: ['recordDoc', 'designDoc', 'code'],
     fullRescanSignals: ['recordDoc'],
   },
+  // riskmodel（想定ケースの存在・mapping）と同じ入力に反応する姉妹観点として同一のトリガーを
+  // 割り当てる（§4.2 routing table は riskmodel/testquality を常に同時加算する行を持つ）。
+  // testquality 自体は test の oracle・regression detection 能力を問うため、riskTable の
+  // 変更（想定ケースの追加・変更）はこちらも全体再探索の対象にする。
+  testquality: {
+    alwaysExplore: false,
+    exploreSignals: ['code', 'guard', 'test'],
+    fullRescanSignals: ['riskTable'],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -282,6 +291,9 @@ export const ANGLE_EXEC_BASELINE = {
   operability: { model: 'sonnet', effort: 'high', maxTurns: 35 },
   cleanup: { model: 'sonnet', effort: 'medium', maxTurns: 35 },
   memory: { model: 'sonnet', effort: 'medium', maxTurns: 25 },
+  // riskmodel と同じ「機械的照合寄り」区分（診断対象は diff・test 自体で、期待挙動の自力導出は
+  // 本質でない）として同一の基準を割り当てる。
+  testquality: { model: 'sonnet', effort: 'medium', maxTurns: 35 },
 };
 
 // 観点レビュアー以外の review-* エージェント（Tier 必須集合の外）。

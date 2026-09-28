@@ -24,6 +24,10 @@ import {
   TIER_DECL_NAMES,
   BASE_TIER_NAMES,
   DOCS_ONLY_TIER_NAMES,
+  KNOWN_SIDECARS,
+  AUTHORITY_RECEIPT_LABEL,
+  AUTHORITY_RECEIPT_VERSION,
+  parseAngleList,
 } from './review-angle-tokens.js';
 
 // docs のみ PR で使う非基礎 Tier（mandate 名 → 宣言名・エラー文言用ラベル）。Phase 2 で
@@ -281,6 +285,27 @@ const EFFECTIVE_TIER_DECL = new RegExp(
   `(?:^|\\n)[ \\t]*実効\\s?Tier\\s*[:：]\\s*(${TIER_NAME_ALT})\\s*[（(]([^（）()\\n]{0,300})[）)][ \\t]*(?=\\n|$)`,
   'g',
 );
+// 「実効Tier」の緩い出現判定（#645）。EFFECTIVE_TIER_DECL は段落内・正しい書式のみに一致するため、
+// インラインコードで値を囲む・全角空白を前置する・箇条書きにする等の「書式が壊れた宣言らしきもの」は
+// decls.length===0（＝「宣言なし」）に落ちてしまい、authority receipt 採用時に実効Tierの
+// anti-shrink floor（checkLoopSection 参照）が無警告で無効化される（敵対的レビュー2周目所見
+// ADV2-1）。本来の宣言 raw text（loopNodes の生ソース）に対してこの緩い判定を独立に行い、
+// 「本物の宣言意図はあるが decl が無い」状態を「宣言そのものが無い」と区別できるようにする
+// （TIER_MENTION/TIER_MENTION_BROAD と同じ思想。ただし対象は receipt 採用時の fail-loud 判定
+// にのみ使う — 既存の legacy 専用実効Tier検証自体は変更しない）。
+// TIER_MENTION と同じく行頭アンカー付き（`(?:^|\n)[ \t]*`）にする——アンカーを外すと
+// 「補足: 実効Tier: 加算なし（今回は不要）」のような地の文中の言及（宣言意図ではない自由記述）
+// まで「宣言らしきもの」と誤検出する（敵対的レビュー3周目 ADV3-1 の派生確認）。
+// 'g' 付き。AUTHORITY_RECEIPT_MENTION と同じ理由で件数を matchAll のみで数える
+// （この正規表現に対して .test() を呼ばないこと）。
+const EFFECTIVE_TIER_MENTION = /(?:^|\n)[ \t]*実効\s?Tier\s*[:：]/g;
+// TIER_MENTION_BROAD と同じ「箇条書き・見出し内の本物の宣言意図」を拾う非段落文脈用の緩い判定
+// （外部レビュー Codex 指摘: `- 実効Tier: Full（…）` のような箇条書き宣言が
+// EFFECTIVE_TIER_MENTION〔段落のみ〕にも findEffectiveTierDecls にも掛からず「宣言なし」に
+// 静かに落ち、和集合フロアが不発火のまま receipt の縮小だけが通っていた）。TIER_MENTION_BROAD
+// と異なり否定先読みは不要（実効Tier自身を除外する必要がない）。'g' 付き（countBroadMentions が
+// matchAll で件数を数える。この正規表現に対して .test() を呼ばないこと）。
+const EFFECTIVE_TIER_MENTION_BROAD = /実効\s?Tier\s*[:：]/g;
 // 除外ノード（inlineCode/html/delete）の境界マーカー（U+FFFC）。理由 substance 判定では
 // これを取り除いてから空・プレースホルダを見る（マーカーで理由を偽装する回帰を塞ぐ — 3周目 A-r3-1）
 const RUN_MARKER = '￼';
@@ -316,12 +341,15 @@ function escapeWorkflowData(s) {
   return s.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
 }
 
-// Tier 宣言はループセクション**直下の段落**からのみ読む。コードフェンス・インラインコード・
-// 引用・表セル・HTML・打ち消し線の中の `Tier: …` は例示・引用・取り消しであり宣言と数えない
+// レビューループ記録セクション内の閉じた1行宣言（Tier: / 実効Tier: / Authority receipt:）は
+// セクション**直下の段落**からのみ読む。コードフェンス・インラインコード・引用・表セル・HTML・
+// 打ち消し線の中の宣言文字列は例示・引用・取り消しであり宣言と数えない
 // （収束セルの containsDelete と同じ「取り消された値」境界。宣言だけ透過だと非対称の穴になる）。
 // 除外ノードは**除去でなく境界マーカー（U+FFFC）に置換**する — 除去して連結すると
-// `` `補足` Tier: Full（…） `` の行頭アンカーが偽装でき、地の文が宣言化・偽競合する（2周目 A-1）
-function tierDeclRuns(loopNodes) {
+// `` `補足` Tier: Full（…） `` の行頭アンカーが偽装でき、地の文が宣言化・偽競合する（2周目 A-1）。
+// Tier 宣言専用だった実装を #645 で Authority receipt 宣言（findAuthorityReceipts）とも共有する
+// 汎用ヘルパーへ改名した（同じ境界規則を複製しない）。
+function loopDeclRuns(loopNodes) {
   const runs = [];
   for (const node of loopNodes) {
     if (node.type !== 'paragraph') continue;
@@ -341,7 +369,16 @@ function tierDeclRuns(loopNodes) {
         cur += n.value;
         return;
       }
-      for (const child of n.children ?? []) walk(child);
+      // テキストも子も持たない leaf node（image・imageReference・空の link 等）は、除去して
+      // 連結すると前後の無関係な地の文が偽装連結され得る（`Authority` + 画像 + `receipt:` が
+      // `Authority receipt:` に見えてしまう等）。除外ノードと同じ境界マーカーを置く
+      // （Codex 指摘: #646。countBroadMentions() の同種修正と同じ理由）。
+      const children = n.children ?? [];
+      if (children.length === 0) {
+        cur += RUN_MARKER;
+        return;
+      }
+      for (const child of children) walk(child);
     })(node);
     runs.push(cur);
   }
@@ -352,7 +389,7 @@ function tierDeclRuns(loopNodes) {
 // 打ち消し線の中は宣言と数えない境界を共有する）
 function findEffectiveTierDecls(loopNodes) {
   const decls = [];
-  for (const run of tierDeclRuns(loopNodes)) {
+  for (const run of loopDeclRuns(loopNodes)) {
     for (const m of run.matchAll(EFFECTIVE_TIER_DECL)) {
       decls.push({ tier: m[1].replace('+', '＋'), reason: m[2].trim() });
     }
@@ -363,7 +400,7 @@ function findEffectiveTierDecls(loopNodes) {
 function findTierDecls(loopNodes) {
   const decls = [];
   let mention = false;
-  for (const run of tierDeclRuns(loopNodes)) {
+  for (const run of loopDeclRuns(loopNodes)) {
     if (TIER_MENTION.test(run)) mention = true;
     for (const m of run.matchAll(TIER_DECL)) {
       decls.push({ tier: m[1].replace('+', '＋'), reason: m[2].trim() });
@@ -391,6 +428,323 @@ function findTierDecls(loopNodes) {
     })({ children: loopNodes });
   }
   return { decls, mention };
+}
+
+// --- Authority receipt（#645「head-bound execution-plan receipt」。契約の正本は
+// Phase 5 §3.5 のrouting assessment契約・§15.4のauthority switch） ---
+//
+// authority routing（review-plan.js の semantic selectedAngles）が legacy Tier より狭い
+// reviewer 集合を選んだ場合に、その actual execution obligation を PR head へ束縛した
+// derived execution record として PR 本文へ運ぶ閉じた1行宣言。生成側の唯一の正本は
+// review-plan.js の formatAuthorityReceipt()。ここでは検証するだけで、selectedAngles・
+// escalation overlay・incomplete/error anti-skip 等を一切再計算しない
+// （正本: docs/planning/review-system-phase5-plan.md §3.5, §15.4, #645 要求「check-artifacts.js
+// 内に routing policy / Tier policy の第二正本を増やさない」）。
+//
+// Tier 宣言と同じく「本物の宣言意図があるのに書式外」（fail-loud）と「宣言そのものが無い」
+// （legacy Tier へ fail-safe fallback）を区別する。区別の入口はラベルの緩い出現判定
+// （AUTHORITY_RECEIPT_MENTION）で、値の妥当性（version・head SHA 形式・authority 列挙・
+// 閉じた語彙・internal invariant）は一致した宣言ごとに個別検証する — こうしないと
+// `authority=不正値` 等の書式違反行が「宣言なし」に誤って倒れ、malformed receipt が
+// fail-loud にならず legacy fallback で静かに素通りしてしまう（#645 想定ケース5）。
+const AUTHORITY_RECEIPT_LABEL_ESCAPED = AUTHORITY_RECEIPT_LABEL.replace(
+  /[.*+?^${}()|[\]\\]/g,
+  '\\$&',
+);
+// 'g' 付き。件数を数えるのに matchAll を使う（matchAll は呼び出しごとに独立した反復子を作り、
+// exec/test と異なりこの正規表現オブジェクトの lastIndex を汚さない）。この正規表現に対して
+// .test() を呼ばないこと（'g' 付きで .test() を呼ぶと lastIndex が変化し、次回呼び出し結果が
+// 直前の呼び出し位置に依存してしまう）。
+const AUTHORITY_RECEIPT_MENTION = new RegExp(
+  `(?:^|\\n)[ \\t]*${AUTHORITY_RECEIPT_LABEL_ESCAPED}\\s*[:：]`,
+  'g',
+);
+// TIER_MENTION_BROAD・EFFECTIVE_TIER_MENTION_BROAD と同じ「箇条書き・見出し内の本物の宣言意図」
+// を拾う非段落文脈用の緩い判定（外部レビュー Codex 指摘: `- Authority receipt: v1 ...` のような
+// 箇条書き宣言は loopDeclRuns〔段落のみ〕にも AUTHORITY_RECEIPT_DECL にも掛からず、mentionCount
+// にも counted されないため、併存する有効な receipt だけが採用されてしまっていた）。'g' 付き
+// （countBroadMentions が matchAll で件数を数える。この正規表現に対して .test() を呼ばないこと）。
+const AUTHORITY_RECEIPT_MENTION_BROAD = new RegExp(
+  `${AUTHORITY_RECEIPT_LABEL_ESCAPED}\\s*[:：]`,
+  'g',
+);
+// 箇条書き・見出し内の宣言ラベル出現を件数で数える汎用ヘルパー（findTierDecls の
+// listItem/heading walk と同じ考え方。TIER_MENTION_BROAD の対象を汎用化した版で、
+// AUTHORITY_RECEIPT_MENTION_BROAD・EFFECTIVE_TIER_MENTION_BROAD の両方で共有する）。
+// コード・インラインコード・html に加え、打ち消し線（取り消し済みの値）・引用（自分の宣言では
+// ない引用文）も除外する（実質テキストのみを対象にする。loopDeclRuns の段落境界が打ち消し線・
+// 引用を宣言と数えないのと同じ境界を、非段落文脈の broad 検出でも揃える。Codex 指摘: #646）。
+// 引用は「listItem/heading に到達する前」に止める必要がある —
+// `> - 実効Tier: ...` は blockquote > list > listItem という構造で、外側の walk が
+// blockquote の子へ再帰してしまうと引用内の listItem が「宣言意図あり」と誤検出される。
+// 真偽値ではなく件数を返す — 有効な宣言が1件あるだけで併存する別の壊れた broad 宣言が
+// 見逃される（Authority receipt の mentionCount と同じ発想。Codex 指摘: #646）。
+// 除外ノードは loopDeclRuns と同じく**除去でなく境界マーカー（RUN_MARKER）に置換**する —
+// 除去して連結すると、除外ノードの前後にある無関係な地の文が偽装連結され「Authority receipt:」
+// 等のラベルへ偽装できてしまう（例:「Authority `x` receipt: 〜の説明」の inlineCode を単純に
+// 除去すると「Authority receipt:」に見えてしまい、正当な PR が誤って fail-loud になる。
+// Codex 続報指摘: #646）。既知の除外型だけでなく、テキストも子も持たない leaf node
+// （image・imageReference・break・thematicBreak 等）も同じ危険がある —
+// 「Authority ![](x)receipt: 〜の説明」のような画像・空リンクは `value` も `children` も
+// 持たないため、除外リストに入れない限り何も追加せず消え、前後が同様に偽装連結される
+// （Codex 続報指摘: #646）。そのため「除外型リスト」で個別に列挙するのではなく、
+// 「テキストを生成せず・子も持たないノードは無条件にマーカーを置く」という否定的判定に統一する。
+// `mentionRe` は 'g' フラグ必須（matchAll で数える）。
+function countBroadMentions(loopNodes, mentionRe) {
+  let count = 0;
+  (function walk(n) {
+    if (n.type === 'blockquote') return;
+    if (n.type === 'listItem' || n.type === 'heading') {
+      let txt = '';
+      (function collect(m) {
+        if (['code', 'inlineCode', 'html', 'delete', 'blockquote'].includes(m.type)) {
+          txt += RUN_MARKER;
+          return;
+        }
+        if (typeof m.value === 'string') {
+          txt += m.value;
+          return;
+        }
+        const children = m.children ?? [];
+        if (children.length === 0) {
+          txt += RUN_MARKER;
+          return;
+        }
+        for (const c of children) collect(c);
+      })(n);
+      count += [...txt.matchAll(mentionRe)].length;
+    }
+    for (const child of n.children ?? []) walk(child);
+  })({ children: loopNodes });
+  return count;
+}
+// フィールド名・順序のみを固定し、値は（形式は問わず）非空白トークンとして緩く受理する。
+// 値の妥当性（version が対応バージョンか・head が40桁hexか・authority が既知enumか・
+// 各リストが閉じた語彙か）はここでは判定せず、一致した宣言ごとに resolveAuthorityReceipt が
+// 検証する。ここで value 側まで厳格にすると、不正値を持つ行がこの正規表現自体に一致せず
+// 「mention はあるが decl が無い」（＝書式外）ではなく「decl そのものが存在しない」側の
+// 挙動と区別できなくなる。量指定子はすべて上限付き（他パターンと同じ ReDoS 方針）。
+// フィールド間の区切りは `[ \t]`（半角空白・タブ）のみに限定する — `\s` は改行も含むため、
+// `Authority receipt:` の次行以降にフィールドを分割して書いた複数行の宣言まで「閉じた1行
+// 宣言」として一致してしまう（契約・エラー文言はいずれも単独の1行を要求している。Codex 指摘）
+const AUTHORITY_RECEIPT_DECL = new RegExp(
+  `(?:^|\\n)[ \\t]*${AUTHORITY_RECEIPT_LABEL_ESCAPED}[ \\t]*[:：][ \\t]*` +
+    `v([^\\s]{1,10})[ \\t]+` +
+    `head=([^\\s]{1,300})[ \\t]+` +
+    `authority=([^\\s]{1,300})[ \\t]+` +
+    `selected=([^\\s]{1,300})[ \\t]+` +
+    `escalated=([^\\s]{1,300})[ \\t]+` +
+    `conditional=([^\\s]{1,300})[ \\t]+` +
+    `effective=([^\\s]{1,300})[ \\t]+` +
+    `sidecars=([^\\s]{1,300})` +
+    `[ \\t]*(?=\\n|$)`,
+  'g',
+);
+
+// レビューループ記録セクション内の Authority receipt 宣言をすべて集める（構文一致のみ。
+// 値の妥当性検証は resolveAuthorityReceipt が行う）。
+//
+// `mentionCount` は「ラベル自体が何回出現したか」を独立に数える（真偽値の `mention` ではない）。
+// 外部レビュー Codex 指摘: 有効な receipt が1件あるだけで `matches.length > 0` になり、
+// 同じセクション内に併存する**別の・書式が壊れた** `Authority receipt:` 行（フィールド欠落等で
+// AUTHORITY_RECEIPT_DECL に一致しない）が検証から漏れて無言で無視されていた（例: 更新途中の
+// 古い縮小 receipt を消し忘れたまま新しい行を追記した場合、新しい行が壊れていても有効な
+// 古い行だけが採用されて exit 0 になる）。`mentionCount` と `matches.length` の差で
+// 「ラベルは出現したが decl として一致しなかった行がある」ことを検出できるようにする。
+// 続報の Codex 指摘: 上記は loopDeclRuns（段落のみ）上でしか数えていなかったため、箇条書き・
+// 見出しとして書かれた壊れた receipt（`- Authority receipt: v1 head=... selected=riskmodel`
+// 等）は mentionCount にも matches にも現れず、併存する有効な receipt だけが採用されて
+// しまっていた。countBroadMentions で非段落文脈のラベル出現も mentionCount に合算する。
+function findAuthorityReceipts(loopNodes) {
+  const matches = [];
+  let mentionCount = 0;
+  for (const run of loopDeclRuns(loopNodes)) {
+    mentionCount += [...run.matchAll(AUTHORITY_RECEIPT_MENTION)].length;
+    for (const m of run.matchAll(AUTHORITY_RECEIPT_DECL)) {
+      matches.push({
+        raw: m[0].trim(),
+        version: m[1],
+        headSha: m[2],
+        authority: m[3],
+        selectedRaw: m[4],
+        escalatedRaw: m[5],
+        conditionalRaw: m[6],
+        effectiveRaw: m[7],
+        sidecarsRaw: m[8],
+      });
+    }
+  }
+  mentionCount += countBroadMentions(loopNodes, AUTHORITY_RECEIPT_MENTION_BROAD);
+  return { matches, mentionCount };
+}
+
+// 閉じた語彙検証。`ANGLE_TOKENS[tok]` のようなブラケットアクセスは __proto__ 等の
+// プロトタイプ鎖キーで誤って真になりうるため使わず、Object.hasOwn / Array#includes のみで
+// 判定する（review-plan.js の assertKnownAngle と同じ理由）。
+function unknownTokens(tokens, isKnown) {
+  return tokens.filter((t) => !isKnown(t));
+}
+const isKnownNormalAngle = (t) => Object.hasOwn(ANGLE_TOKENS, t);
+const isKnownConditionalAngle = (t) => Object.hasOwn(CONDITIONAL_ANGLE_TOKENS, t);
+const isKnownSidecar = (t) => KNOWN_SIDECARS.includes(t);
+const AUTHORITY_VERSION_RE = /^\d{1,10}$/;
+const HEAD_SHA_RE = /^[0-9a-fA-F]{40}$/;
+
+/**
+ * 単一の Authority receipt 宣言（構文一致済み）の**構文・語彙・内部整合性のみ**を検証する
+ * （trust 判定＝fallback宣言/stale/空集合floorは resolveAuthorityReceipt 側の責務。
+ * Tier 宣言側が `checkTierDecl`〔構文・ポリシー検証〕と `applyEffectiveTier`〔trust・拡張
+ * 判定〕を分けているのと同じ分割をここでも踏襲する。コード品質レビュー所見）。
+ *
+ * 返り値: `{ errors, selected, escalated, conditional, effective, sidecars }`。
+ * `errors` が非空なら他フィールドの値は呼び出し側で使わないこと（version/head/authority
+ * 自体が不正な場合、値の意味自体が定義できないため角度リストのパースを打ち切る）。
+ */
+function validateAuthorityReceiptFields(m) {
+  const errors = [];
+  if (!AUTHORITY_VERSION_RE.test(m.version) || Number(m.version) !== AUTHORITY_RECEIPT_VERSION) {
+    errors.push(
+      `Authority receipt の version が非対応です（受理: v${AUTHORITY_RECEIPT_VERSION} / 宣言: ${sanitizeForLogLine(`v${m.version}`)}）`,
+    );
+  }
+  if (!HEAD_SHA_RE.test(m.headSha)) {
+    errors.push(
+      `Authority receipt の head がフル40桁の hex ではありません（宣言: ${sanitizeForLogLine(m.headSha)}）`,
+    );
+  }
+  if (m.authority !== 'authority' && m.authority !== 'fallback') {
+    errors.push(
+      `Authority receipt の authority は authority / fallback のいずれかである必要があります（宣言: ${sanitizeForLogLine(m.authority)}）`,
+    );
+  }
+  // 上記いずれかが不正な場合、以降の閉じた語彙・整合性検証は意味を持たない
+  // （不正な authority 値では stale/floor 判定の分岐自体が定義できない）ため、ここで確定する
+  if (errors.length > 0) return { errors };
+
+  const selected = parseAngleList(m.selectedRaw);
+  const escalated = parseAngleList(m.escalatedRaw);
+  const conditional = parseAngleList(m.conditionalRaw);
+  const effective = parseAngleList(m.effectiveRaw);
+  const sidecars = parseAngleList(m.sidecarsRaw);
+
+  const badTokens = [
+    ...unknownTokens(selected, isKnownNormalAngle),
+    ...unknownTokens(escalated, isKnownNormalAngle),
+    ...unknownTokens(effective, isKnownNormalAngle),
+    ...unknownTokens(conditional, isKnownConditionalAngle),
+    ...unknownTokens(sidecars, isKnownSidecar),
+  ];
+  if (badTokens.length > 0) {
+    errors.push(
+      `Authority receipt に閉じた語彙外の値があります: ${[...new Set(badTokens)].map(sanitizeForLogLine).join(' / ')}（正本: scripts/agent/review-angle-tokens.js）`,
+    );
+  }
+
+  // 内部整合性: buildPlan() は常に effectiveAngles ⊇ semanticSelectedAngles・
+  // effectiveAngles ⊇ escalatedAngles を満たす（authority mode は合成元、fallback mode は
+  // semanticSelectedAngles=[] で自明に満たす）。この不変条件を破る receipt は生成経路の出力では
+  // あり得ない＝改変・手書きの兆候として fail-loud にする
+  // （正本: review-system-phase5-plan.md §4.1, review-plan.js buildPlan() の effectiveAngles 算出）。
+  const effectiveSet = new Set(effective);
+  const missingFromEffective = [...new Set([...selected, ...escalated])].filter(
+    (a) => !effectiveSet.has(a),
+  );
+  if (missingFromEffective.length > 0) {
+    errors.push(
+      'Authority receipt の internal invariant 違反です（effective は selected/escalated を' +
+        `包含する必要があります。欠落: ${missingFromEffective.join(' / ')}）`,
+    );
+  }
+
+  return { errors, selected, escalated, conditional, effective, sidecars };
+}
+
+/**
+ * レビューループ記録セクションから Authority receipt を解決する。
+ *
+ * 返り値:
+ * - `{ present: false }`: receipt が無い（authority routing 未使用・legacy PR）。
+ *   呼び出し側は従来どおり legacy Tier 必須系統を使う。
+ * - `{ present: true, errors: [...] }`: receipt はあるが閉じた文法・語彙・内部整合性の
+ *   いずれかに違反する（fail-loud。#645 想定ケース5「malformed receipt」）。
+ * - `{ present: true, errors: [], useReceipt: false, reason }`: receipt は構文・値とも正しいが、
+ *   fallback 宣言 / stale（head 不一致）/ 空集合floor不合格のいずれかにより信用しない
+ *   （legacy Tier 必須系統へ安全側フォールバック。エラーではなく warnings 相当）。
+ * - `{ present: true, errors: [], useReceipt: true, requiredAngles: [...] }`: receipt を
+ *   信用し、`effective` を必須系統の正とする。
+ */
+function resolveAuthorityReceipt(loopNodes, { trustedHeadSha, codeChanged }) {
+  const { matches, mentionCount } = findAuthorityReceipts(loopNodes);
+  const RECEIPT_FORMAT_ERROR =
+    `Authority receipt 宣言が受理文法外です（\`${AUTHORITY_RECEIPT_LABEL}: v1 head=<40桁hex> ` +
+    'authority=authority|fallback selected=<系統,...|-> escalated=<...> conditional=<...> ' +
+    'effective=<...> sidecars=<...>`。宣言は段落の行として単独で書く。' +
+    '生成は `node scripts/agent/review-plan.js plan` の出力を貼り付ける）';
+  if (matches.length === 0) {
+    if (mentionCount === 0) return { present: false };
+    return { present: true, errors: [RECEIPT_FORMAT_ERROR] };
+  }
+  // 外部レビュー Codex 指摘: `matches.length > 0` だけを見ると、有効な receipt が1件でもあれば
+  // 同じセクション内に併存する**別の・書式が壊れた** `Authority receipt:` 行（フィールド欠落等）
+  // が検証されずに無視される（更新途中の古い縮小 receipt を消し忘れたまま新しい行を追記した
+  // 場合、新しい行が壊れていても古い行だけが採用されて exit 0 になる）。ラベルの出現数
+  // （mentionCount）と実際に構文一致した件数（matches.length）が食い違う＝一致しなかった
+  // 行が存在する、として fail-loud にする。
+  if (mentionCount > matches.length) {
+    return { present: true, errors: [RECEIPT_FORMAT_ERROR] };
+  }
+
+  const distinctRaw = new Set(matches.map((m) => m.raw));
+  if (distinctRaw.size > 1) {
+    return {
+      present: true,
+      errors: [
+        `Authority receipt 宣言が競合しています（${[...distinctRaw].map(sanitizeForLogLine).join(' / ')}）。宣言は1つにしてください`,
+      ],
+    };
+  }
+
+  const m = matches[0];
+  const { errors, effective } = validateAuthorityReceiptFields(m);
+  if (errors.length > 0) return { present: true, errors };
+
+  // --- ここから trust 判定（構文・語彙・整合性はすべて正しいことが確定した後） ---
+
+  if (m.authority === 'fallback') {
+    return { present: true, errors: [], useReceipt: false, reason: 'receipt が fallback を宣言' };
+  }
+
+  const stale = !trustedHeadSha || trustedHeadSha.toLowerCase() !== m.headSha.toLowerCase();
+  if (stale) {
+    return {
+      present: true,
+      errors: [],
+      useReceipt: false,
+      reason: `receipt の head（${m.headSha}）が現在の PR head と一致しません（stale）`,
+    };
+  }
+
+  // 空集合floor（#645 想定ケース9）: buildPlan() 自身が「authority selection が空集合かつ
+  // diff がコード変更を伴う」場合に fallback へ倒す（空集合フロア。review-plan.js の
+  // 同名コメント参照。selectedSidecars の有無に関わらず発火する）ため、この組み合わせを
+  // 満たす receipt が正規の生成経路から出ることはない。
+  // `sidecars` はこの判定に**含めない**（risk-model 検証所見: `sidecars.length === 0` を
+  // AND 条件に含めると、`sidecars` に何か1つでも値〔例: `/security-review`〕を入れるだけで
+  // floor が不発火になり、コード変更を伴う diff でも通常系統ゼロ件を通せてしまう。
+  // `sidecars` は machine-tracked obligation ではないため、それ単体を通常 angle 側の義務を
+  // 免除する根拠にしてはならない — floor の判定対象からは意図的に除外する）。
+  if (effective.length === 0 && codeChanged) {
+    return {
+      present: true,
+      errors: [],
+      useReceipt: false,
+      reason:
+        'receipt が authority かつ effective を空集合として宣言していますが、diff は' +
+        'コード変更を伴います（sidecars の有無に関わらず、安全側として legacy Tier 必須系統を使用します）',
+    };
+  }
+
+  return { present: true, errors: [], useReceipt: true, requiredAngles: [...new Set(effective)] };
 }
 
 // 系統セルのトークン照合。セルは「＋」等で複数系統を連結できる。装飾はトークンの外側の
@@ -715,7 +1069,7 @@ function loopTable(sectionNodes) {
 }
 
 // レビューループ記録の収束宣言＋Tier 宣言×系統列の検査（full / design / record / docs の全 mandate で共用 #452）
-function checkLoopSection({ loopNodes, src, mandate, designDocsChanged, docsOnly }) {
+function checkLoopSection({ loopNodes, src, mandate, designDocsChanged, docsOnly, headSha }) {
   const errors = [];
   const warnings = [];
   const tierResult = checkTierDecl({ loopNodes, mandate, designDocsChanged, docsOnly });
@@ -788,8 +1142,103 @@ function checkLoopSection({ loopNodes, src, mandate, designDocsChanged, docsOnly
   });
   errors.push(...effResult.errors);
   warnings.push(...effResult.warnings);
+
+  // #645: authority routing execution receipt があれば、必須系統の正を legacy Tier
+  // （tierResult/effResult が導出した集合）から receipt の `effective`（=review-plan.js の
+  // effectiveAngles = selectedAngles ∪ escalatedAngles ∪ incomplete/error anti-skip）へ
+  // 差し替える。Tier: / 実効Tier: の検証自体は上で無条件に実行済み（compat 表示として維持）。
+  // receipt が無い・fallback を宣言・stale・空集合floor不合格のいずれの場合も legacy
+  // requiredAngles をそのまま使う（安全側を縮小しない。正本: review-system-phase5-plan.md §15.4）。
+  const receipt = resolveAuthorityReceipt(loopNodes, {
+    trustedHeadSha: headSha,
+    codeChanged: !docsOnly,
+  });
+  // 「receipt が有効（schema/語彙/整合性エラーなし）かつ信用する」の判定は1箇所にまとめる
+  // （コード品質レビュー所見: 同じ3項条件を requiredAngles 算出と warning 追加の2箇所で
+  // 複製すると、判定を変えたときに片方だけ更新して矛盾する状態を作りうる）
+  const receiptValid = receipt.present && receipt.errors.length === 0;
+  if (receipt.present && receipt.errors.length > 0) {
+    errors.push(...receipt.errors);
+  }
+  if (receiptValid && !receipt.useReceipt) {
+    warnings.push(`Authority receipt を採用しませんでした（${receipt.reason}）。legacy Tier の必須系統を使用します`);
+  }
+  // 敵対的レビュー所見 ADV-1（blocker 級・修正済み）: 当初実装は receipt 採用時に
+  // `effResult.requiredAngles`（Tier: 宣言＋「実効Tier:」宣言の widen-only 加算）を丸ごと
+  // receipt.requiredAngles に置き換えていた。「実効Tier:」は legacy 専用の PR 本文宣言だが、
+  // 唯一 machine-enforced な「PR 内で必須系統を縮小できない」不変条件（`applyEffectiveTier` の
+  // 縮小拒否）を持つ——これは receipt の信頼性とは独立した、**著者自身がこの PR 本文内で
+  // 今まさに表明した意思**であり、head SHA が一致する receipt であっても黙って上書きしてよい
+  // 対象ではない（実行確認: 修正前は `実効Tier: Full（外部レビューで所見）` を宣言していても
+  // receipt の縮小がそのまま採用され、旧経路が持っていた fail-closed の anti-shrink が
+  // warning 止まりに降格していた）。
+  // 「receipt がある場合だけ通常angleの適用集合の正本を差し替える」という設計自体
+  // （initial Tier の求める7/5系統フロアを緩めること）は issue #645 の目的そのものであり
+  // 変更しない。変更するのは「実効Tier」宣言がある場合**だけ**、その宣言が要求する集合を
+  // receipt の集合との**和集合**として維持する部分——「実効Tier」が無ければ従来どおり
+  // receipt.requiredAngles のみを使う（削減効果は変わらない）。
+  const effectiveTierDecls = findEffectiveTierDecls(loopNodes);
+  const effectiveTierDeclared = effectiveTierDecls.length > 0;
+  // 敵対的レビュー2周目所見 ADV2-1: 上記の和集合フロアは「実効Tier宣言が正しくparseできた場合」
+  // だけ働く。値をインラインコードで囲む・全角空白を前置する・箇条書きにする等で書式が壊れた
+  // 「実効Tier」記述は EFFECTIVE_TIER_DECL に一致せず decls.length===0（＝宣言なし）へ静かに
+  // 落ちるため、和集合フロアが無警告で不発火になり、人間には「Full へ加算済み」と読める本文の
+  // まま receipt の縮小がそのまま通ってしまう（実行確認済みの回帰）。receipt を採用する場合に
+  // 限り、EFFECTIVE_TIER_MENTION（緩い出現判定）で「本物の宣言意図はあるが decl が無い」状態を
+  // 検出し、Tier: 宣言の書式外検出と同じく fail-loud にする（legacy 専用の実効Tier検証自体は
+  // 変更しない — receipt 非採用時にこの追加検証は行わない）。
+  //
+  // 敵対的レビュー3周目所見 ADV3-1（修正済み）: 当初は sectionSourceLines（ループセクションの
+  // 生ソース全文）に対して緩い判定をかけていたため、表セル・コードフェンス・引用・打ち消し線・
+  // 対応セルの地の文（例:「収束（実効Tier: 加算なし）」）まで「書式外宣言」と誤検出していた。
+  // Tier: 宣言・EFFECTIVE_TIER_DECL 自身と同じ境界（loopDeclRuns＝段落のみ、コードフェンス・
+  // インラインコード・引用・表セル・打ち消し線を除外）で判定するよう修正した——値だけを
+  // インラインコードで囲む（ADV2-1 が検出すべき攻撃）場合はラベル自体は段落の平文として残るため
+  // 引き続き検出できる。
+  // 外部レビュー Codex 指摘: 段落限定の判定だけだと、箇条書き（`- 実効Tier: Full（…）`）や
+  // 見出し化された宣言が「宣言なし」に静かに落ちる（Tier: 宣言側は TIER_MENTION_BROAD で
+  // 同じ非段落文脈を broad 検出済み）。同じ非対称を作らないよう countBroadMentions も併用する。
+  // 続報の Codex 指摘: `!effectiveTierDeclared` でゲートすると、有効な実効Tier宣言が1件でも
+  // あれば併存する**別の・書式が壊れた**実効Tier宣言（例: 古い `実効Tier: Light（…）` を
+  // 残したまま新しい `実効Tier: `Full`（…）` の貼り付けに失敗した場合）が無視されてしまう。
+  // Authority receipt の mentionCount 方式と同じく「ラベル出現数」と「構文一致した宣言数」を
+  // 比較し、一致しなかった宣言が1件でも残っていれば `effectiveTierDeclared` の真偽に関わらず
+  // fail-loud にする。
+  const effectiveTierMentionCount =
+    loopDeclRuns(loopNodes).reduce(
+      (n, run) => n + [...run.matchAll(EFFECTIVE_TIER_MENTION)].length,
+      0,
+    ) + countBroadMentions(loopNodes, EFFECTIVE_TIER_MENTION_BROAD);
+  if (
+    receiptValid &&
+    receipt.useReceipt &&
+    effectiveTierMentionCount > effectiveTierDecls.length
+  ) {
+    errors.push(
+      '「実効Tier:」の記述らしきものがありますが、受理文法（`実効Tier: {宣言名}（昇格理由1行）`を' +
+        '段落の行として単独で書く）に一致しません。Authority receipt が有効な場合、実効Tier宣言が' +
+        '正しく認識されないとその加算（縮小しないフロア）が働きません。書式を修正するか、' +
+        '実効Tier宣言を使わないなら該当の記述を削除してください',
+    );
+  }
+  const requiredAngles =
+    receiptValid && receipt.useReceipt
+      ? effectiveTierDeclared
+        ? [...new Set([...receipt.requiredAngles, ...effResult.requiredAngles])]
+        : receipt.requiredAngles
+      : effResult.requiredAngles;
+  if (receiptValid && receipt.useReceipt && effectiveTierDeclared) {
+    warnings.push(
+      'Authority receipt が有効ですが「実効Tier:」宣言もあるため、必須系統は' +
+        '両者の和集合（receipt の effective ＋ 実効Tier が要求する系統）です。' +
+        'authority mode での加算は本来 `review-plan.js escalate --angles <系統>` を実行し' +
+        'receipt を再生成することを推奨します（次回 push 時に receipt が stale になった際、' +
+        '「実効Tier:」宣言だけが残っていても必須系統の縮小は起きません）',
+    );
+  }
+
   const angleResult = checkRequiredAngles({
-    requiredAngles: effResult.requiredAngles,
+    requiredAngles,
     angleCol,
     findingsCol,
     dataRows,
@@ -899,7 +1348,7 @@ function checkEvidenceIntegrity(tree, src) {
   return errors;
 }
 
-export function checkArtifacts({ changedFiles = [], body = '' }) {
+export function checkArtifacts({ changedFiles = [], body = '', headSha = null }) {
   const errors = [];
   const warnings = [];
 
@@ -1002,6 +1451,7 @@ export function checkArtifacts({ changedFiles = [], body = '' }) {
         mandate,
         designDocsChanged,
         docsOnly: !codeChanged,
+        headSha,
       });
       errors.push(...loopResult.errors);
       warnings.push(...loopResult.warnings);
@@ -1025,6 +1475,7 @@ export function checkArtifacts({ changedFiles = [], body = '' }) {
         mandate,
         designDocsChanged,
         docsOnly: !codeChanged,
+        headSha,
       });
       errors.push(...loopResult.errors);
       warnings.push(...loopResult.warnings);
@@ -1163,6 +1614,40 @@ function resolveBody() {
 // （#446 round3 品質: resolveChangedFiles・エラーメッセージ2箇所で式が重複していた）。
 function resolveBaseRef() {
   return readArg('--base') || process.env.BASE_REF || 'origin/main';
+}
+
+// `git rev-parse HEAD` だけを行う（CLI引数・環境変数の override を一切通さない）。
+// export するのは、scripts/agent/hooks/check-pr-body.js が「ローカルの実際の作業リポジトリの
+// HEAD」だけを検査対象にする必要があるため（Codex 指摘: #646）。hook が `resolveHeadSha()`
+// （下記。CLI引数 → `HEAD_SHA` 環境変数 → git の順）を呼ぶと、セッション環境に `HEAD_SHA` が
+// 残っていた場合（過去の action/CLI 呼び出しの export し忘れ等）、追加コミット後に hook を
+// 実行しても古い SHA がそのまま使われ、実際には stale な receipt をローカル事前検査だけが
+// 「現在の HEAD と一致」と誤判定して通してしまう——CI 側は `pull_request.head.sha`（実際の
+// push 先）で正しく stale 判定するため、事前検査と CI の結果が食い違う。hook の目的は
+// 「まさにこれからpushされる現在の作業ツリーを検査する」ことであり、外部から主張された
+// head 値を信用する理由が無い。
+export function gitHeadSha() {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+// --head-sha CLI 引数 / HEAD_SHA 環境変数 / `git rev-parse HEAD` の順に解決する（#645）。
+// Authority receipt の head 束縛検証に使う「trusted な現在の PR head SHA」。
+// GitHub Actions 経由（bundled action）では head-sha input が required のため常に値を持つ
+// （.github/actions/artifacts-gate/src/index.js が HEAD_SHA へマッピング）。ローカル CLI 単体
+// 実行（--head-sha/HEAD_SHA 未設定）では git から解決するが、取得不能なら null を返す。
+// null は fail-loud にしない — receipt が存在しない大半の PR には無関係であり、
+// resolveAuthorityReceipt 側が「束縛できない」＝ stale 相当として安全側（legacy Tier）へ倒す。
+// **action/CLI 専用 — PreToolUse hook からは呼ばないこと**（上記 `gitHeadSha()` の理由により、
+// hook は override を一切通さない `gitHeadSha()` を直接使う。Codex 指摘: #646）。
+export function resolveHeadSha() {
+  const arg = readArg('--head-sha');
+  if (arg) return arg;
+  if (process.env.HEAD_SHA) return process.env.HEAD_SHA;
+  return gitHeadSha();
 }
 
 // base との差分ファイル一覧。git 実行不能時、または base が "-" 始まり（git オプション注入
@@ -1359,7 +1844,11 @@ export function runCli() {
   }
 
   const body = resolveBody();
-  const { errors, warnings, mandated, mandate } = checkArtifacts({ changedFiles, body });
+  const { errors, warnings, mandated, mandate } = checkArtifacts({
+    changedFiles,
+    body,
+    headSha: resolveHeadSha(),
+  });
 
   // PR_NUMBER / HEAD_SHA / GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT がすべて渡された場合
   // （bundled action 経由）のみ証明行を出す。ローカル CLI 単体実行（create-pr.md 手順3.5 等）
