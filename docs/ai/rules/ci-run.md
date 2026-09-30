@@ -455,24 +455,31 @@ public code repository では branch protection（または ruleset）で以下�
    - `artifacts-gate`
 3. `bundle-check` を required に**個別登録しない**（`required-gate` が内部で判定する。個別登録すると
    意図した skip で PR が pending のまま止まる）。
-4. **Require branches to be up to date before merging** の要否は、CI 消費と運用性のトレードオフで
-   別途判断する（有効化すると main が進むたび全 PR で再実行が必要になり、枠保護の目的と衝突しうる。
-   分離後の実際の PR 頻度・枠状況を見てから決める）。
+4. **Require branches to be up to date before merging** は current public ruleset で **ON**
+   （ruleset `22244828` / `strict_required_status_checks_policy: true`）。ordinary sync #15 / #17 / #18
+   の3種類をこの設定のまま dogfoodし、required check が stuck せず運用できたため維持する。
+   将来 main 更新頻度や CI コストが問題化した場合のみ、#347 相当の運用判断として明示的に見直す。
 5. **CI 成功後の新しい push では再検証を必須とする**（required status checks が SHA 単位で評価
    されることにより自然に満たされる。private 期間のような運用確認は不要になる）。`pull_request` の
    `synchronize` で新しい head SHA に対して CI が自動起動するため、手動起動の運用は public では不要。
 
-これらは GUI / API 操作でありコードでは完結しない。リポジトリ分離作業の一部として実施する。
+current public ruleset（2026-09-29 実測）は default branch 対象・enforcement active、
+`required-gate` + `artifacts-gate` の2checkのみ required、review thread resolution required、
+bypass actors なし / current user bypass `never`。設定変更はコードでは完結しないため、
+将来変更する場合は actual state を再取得して本節と #347 の記録を同時更新する。
 
 ---
 
 ## public/private 分離後: 緊急バイパス方針
 
-public code repository で branch protection を有効化したあとも、**管理者バイパスを全面禁止にはしない**。
-CI 基盤障害・required check 設定の故障・GitHub Actions 障害・緊急セキュリティ修正など、通常経路で
-進行不能になる場合に備え、限定的な緊急経路を残す。
+current public ruleset は **bypass actors なし / current user bypass `never`** であり、
+現時点では管理者を含む緊急バイパス経路を設けていない。CI 基盤障害・required check 設定故障時も
+required checks が復旧するまで merge しない。
 
-- **通常時のバイパスは禁止**。緊急時のみ利用可能とする。
+以下は、将来やむを得ず bypass actor を追加する設計変更を行う場合だけ適用する contingency policy。
+追加時は ruleset actual state と本節を同じ変更で更新する。
+
+- **通常時のバイパスは禁止**。将来追加する場合も緊急時のみ利用可能とする。
 - 可能な限り **PR 経由のバイパスに限定する**（branch protection の "Allow specified actors to bypass
   required pull requests" 等、PR は経由するが required check を admin 権限で override する形）。
 - **main への「理由なし」直接 push は禁止のまま**とする（緊急時であっても push 理由の記録は必須）。
