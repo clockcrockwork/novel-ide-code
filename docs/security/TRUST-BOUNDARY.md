@@ -154,9 +154,14 @@ lint/test/analyze 等）。Claude Code がローカルで実行するもの: `.c
 #446）— 本文を複製しない。単一パスの判定は
 `CHANGED_FILES=<path> node scripts/agent/classify-changes.js` で確認できる。
 
-**fork からの PR では、分類器・required-gate の実装自体が被検査 ref（fork 側の変更）から
-checkout・実行される**ため、CI green は信頼境界の保証ではなく QA ゲートに過ぎない — 信頼境界は
-secrets を fork PR の job へ伝播しない設定・read-only token・merge 前の人間レビューが担う。
+current public review surface は `pull_request_creation_policy: collaborators_only`（2026-09-29 実測）
+のため、非 collaborator の external fork PR は PR 作成入口に到達しない。したがって現設定では
+external contributor approval の実測は N/A。
+
+将来 PR creation policy を `all` に変更して fork PR を受け付ける場合、分類器・required-gate の実装自体が
+被検査 ref（fork 側の変更）から checkout・実行されるため、CI green は信頼境界の保証ではなく QA ゲートに
+過ぎない。変更時は **Require approval for all external contributors** を有効化し、secrets 不伝播・read-only
+token・approval 実効性を再実測する。
 
 ---
 
