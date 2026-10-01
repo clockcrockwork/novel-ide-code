@@ -1,0 +1,35 @@
+name: E2E Observe
+
+on:
+  pull_request:
+    paths:
+      - 'e2e/**'
+      - 'package.json'
+      - 'playwright.config.js'
+      - '.github/workflows/e2e-observe.yml'
+
+permissions:
+  contents: read
+
+env:
+  NPM_PIN: "11.19.0"
+
+jobs:
+  e2e-observe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 22
+      - name: Pin npm
+        run: npm install -g "npm@${NPM_PIN:?NPM_PIN が未定義です}"
+      - name: Install dependencies
+        run: /usr/bin/time -f 'npm-ci elapsed=%e sec maxrss=%M KB' npm ci
+      - name: Install Chromium
+        run: /usr/bin/time -f 'playwright-install elapsed=%e sec maxrss=%M KB' npx playwright install --with-deps chromium
+      - name: Smoke set
+        run: /usr/bin/time -f 'smoke elapsed=%e sec maxrss=%M KB' npm run test:e2e:smoke -- --project=chromium
+      - name: Editor-critical set
+        run: /usr/bin/time -f 'editor-critical elapsed=%e sec maxrss=%M KB' npm run test:e2e:editor-critical -- --project=chromium
