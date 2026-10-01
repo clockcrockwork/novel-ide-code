@@ -1,6 +1,6 @@
 import { test, expect } from '../fixtures/app';
 
-test.describe('設定モーダル', () => {
+test.describe('設定モーダル', { tag: ['@smoke'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });

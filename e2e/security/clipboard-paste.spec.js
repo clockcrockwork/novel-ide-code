@@ -17,7 +17,7 @@ async function pasteIntoEditor(page, { html, plain }) {
   );
 }
 
-test.describe('クリップボード貼り付けセキュリティ', () => {
+test.describe('クリップボード貼り付けセキュリティ', { tag: ['@editor-critical'] }, () => {
   test('script タグ付き HTML を貼り付けてもスクリプトが実行されない', async ({ appPage: page }) => {
     await pasteIntoEditor(page, {
       html: '<p>test</p><script>window.__xss_paste=true</script>',
@@ -103,10 +103,17 @@ test.describe('クリップボード貼り付けセキュリティ', () => {
       plain: 'line1\nline2',
     });
 
-    const content = await page.locator('.tiptap.ProseMirror').textContent();
-    expect(content).toContain('line1');
-    expect(content).toContain('line2');
-    // line1 と line2 が結合されて "line1line2" になっていないことを確認
-    expect(content).not.toMatch(/line1line2/);
+    const editor = page.locator('.tiptap.ProseMirror').first();
+    await expect(editor).toContainText('line1line2');
+    // DOM の textContent は <br> を改行文字へ変換しないため、hardBreak
+    // ノード自体と前後のテキストの隣接を検証する。
+    const hasHardBreak = await editor.evaluate((root) =>
+      [...root.querySelectorAll('br')].some(
+        (br) =>
+          br.previousSibling?.textContent?.endsWith('line1') &&
+          br.nextSibling?.textContent?.startsWith('line2'),
+      ),
+    );
+    expect(hasHardBreak).toBe(true);
   });
 });

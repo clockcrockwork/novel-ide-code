@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "files": {
+    "e2e/core/file-ops.spec.js": [
+      "@smoke"
+    ],
+    "e2e/core/github-disconnected.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/core/mode-switch.spec.js": [
+      "@smoke"
+    ],
+    "e2e/core/sidebar-toggle.spec.js": [
+      "all-only"
+    ],
+    "e2e/core/write-persist.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/editor/diff-layout.spec.js": [
+      "all-only"
+    ],
+    "e2e/editor/find-replace.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/editor/footer-mode-guard.spec.js": [
+      "all-only"
+    ],
+    "e2e/editor/inline-comment.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/editor/input-latency.spec.js": [
+      "@heavy",
+      "@perf"
+    ],
+    "e2e/editor/line-numbers.spec.js": [
+      "all-only"
+    ],
+    "e2e/editor/settings-modal.spec.js": [
+      "@smoke"
+    ],
+    "e2e/editor/word-count.spec.js": [
+      "all-only"
+    ],
+    "e2e/ime/composition.spec.js": [
+      "@heavy",
+      "@ime"
+    ],
+    "e2e/mobile/footer-keyboard.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/ios-floating-ui-keyboard-scroll.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/ios-focus-scroll.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/ios-footer-flex-layout.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/ios-keyboard-scroll.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/ios-viewport-layout.spec.js": [
+      "all-only"
+    ],
+    "e2e/mobile/new-paragraph-button.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/performance/preview-perf.spec.js": [
+      "@perf"
+    ],
+    "e2e/security/clipboard-paste.spec.js": [
+      "@editor-critical"
+    ],
+    "e2e/security/headers.spec.js": [
+      "all-only"
+    ],
+    "e2e/security/xss.spec.js": [
+      "all-only"
+    ]
+  }
+}

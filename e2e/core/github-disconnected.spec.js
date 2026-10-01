@@ -16,7 +16,7 @@ const test = base.extend({
   },
 });
 
-test.describe('GitHub 未接続時の退避モード', () => {
+test.describe('GitHub 未接続時の退避モード', { tag: ['@editor-critical'] }, () => {
   test('未接続でも本文の編集と IndexedDB への保存ができる', async ({ appPage: page }) => {
     const editor = page.locator('.tiptap.ProseMirror').first();
     await editor.click();

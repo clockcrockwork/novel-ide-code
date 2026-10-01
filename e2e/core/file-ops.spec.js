@@ -6,20 +6,21 @@ async function openDropdown(page) {
   await expect(page.getByRole('listbox', { name: 'ファイル一覧' })).toBeVisible({ timeout: 5000 });
 }
 
-/** ドロップダウン内のファイル行（`.fdi`）のうち指定名を含む行の削除ボタンをクリックし、ダイアログを返す */
-async function clickDeleteOnFile(page, nameSubstring) {
-  const dialogPromise = page.waitForEvent('dialog');
+/** ドロップダウン内のファイル行（`.fdi`）の削除ボタンをクリックし、custom modal を返す */
+async function openDeleteModalForFile(page, nameSubstring) {
   // data-nodeid を持たない .fdi がファイル行（フォルダは data-nodeid を持つ）
   const rows = page.locator('.fdrop .fdi:not([data-nodeid])');
-  // テキストで絞り込む
   const targetRow = rows.filter({ hasText: nameSubstring }).first();
   const btn = targetRow.locator('[title="削除"]');
   await btn.waitFor({ state: 'visible', timeout: 5000 });
-  btn.click(); // dialog が出るため await しない（WebKit互換）
-  return dialogPromise;
+  await btn.click();
+
+  const dialog = page.getByRole('dialog', { name: new RegExp(`「.*${nameSubstring}.*」を削除`) });
+  await expect(dialog).toBeVisible({ timeout: 5000 });
+  return dialog;
 }
 
-test.describe('ファイル操作', () => {
+test.describe('ファイル操作', { tag: ['@smoke'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });
@@ -68,8 +69,9 @@ test.describe('ファイル操作', () => {
 
     // ドロップダウンを開いて削除ボタンを押しキャンセル
     await openDropdown(page);
-    const dialog = await clickDeleteOnFile(page, '新規ファイル');
-    await dialog.dismiss();
+    const dialog = await openDeleteModalForFile(page, '新規ファイル');
+    await dialog.getByRole('button', { name: 'キャンセル' }).click();
+    await expect(dialog).not.toBeAttached();
 
     // キャンセル後もファイルが残っている（ヘッダーに名前が表示されたまま）
     await expect(page.locator('.fpname')).toContainText('新規ファイル', { timeout: 5000 });
@@ -94,8 +96,9 @@ test.describe('ファイル操作', () => {
     const beforeCount = await rows.count();
 
     // 削除を実行
-    const dialog = await clickDeleteOnFile(page, '新規ファイル');
-    await dialog.accept();
+    const dialog = await openDeleteModalForFile(page, '新規ファイル');
+    await dialog.getByRole('button', { name: '削除' }).click();
+    await expect(dialog).not.toBeAttached();
 
     // ドロップダウンが閉じることを確認（onClose が呼ばれる）
     await expect(page.getByRole('listbox', { name: 'ファイル一覧' })).not.toBeAttached({
