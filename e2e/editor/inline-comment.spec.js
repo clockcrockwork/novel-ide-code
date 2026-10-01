@@ -29,7 +29,7 @@ async function waitForIDBContent(page, expected) {
     .toBeTruthy();
 }
 
-test.describe('インラインコメント記法', () => {
+test.describe('インラインコメント記法', { tag: ['@editor-critical'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });
