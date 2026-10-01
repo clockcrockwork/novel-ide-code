@@ -22,8 +22,10 @@ test.describe('新規段落ボタン', { tag: ['@editor-critical'] }, () => {
     await page.setViewportSize({ width: 375, height: 812 });
     const editor = page.locator('.tiptap.ProseMirror').first();
 
-    // テキストを入力してカーソルを確定位置に置く
-    await editor.click();
+    // 最終段落にカーソルを明示的に置く。editor.click() は中央の段落へ
+    // 移動し得るため、段落数から挿入位置を推測しない。
+    await editor.locator(':scope > p').last().click();
+    await page.keyboard.press('End');
     await page.keyboard.insertText('前の文章');
     const before = await editor.evaluate((el) => el.querySelectorAll(':scope > p').length);
 
