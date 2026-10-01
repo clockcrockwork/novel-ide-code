@@ -4,9 +4,9 @@
 
 - **正本**: `records/<id>.json`（control repo。1 記憶 1 ファイルの JSON。`mem-<YYYYMMDD>-<6桁>` を id とする）。CLI が最初の `add` 時に `records/` を作成する。
 - **CLI**: `scripts/agent-memory.js`（依存フリー・node ビルトインのみ）。
-- **`records/` は control repo のみ（public tree には含めない）。public 側への digest 同期は issue #345 の残作業（設計 §1.1。配置先は未決定）。** 判定の正本は `scripts/policy/public-tree-policy.js` の `CONTROL_ONLY_DIRS`。本 README・この節自体は説明文書のため public に残す。
+- **`records/` は control repo のみ（public tree には含めない）。** public projection では `scripts/gh/build-public-tree.js` が canonical HEAD の active + `visibility: public` レコードだけから `docs/agent-memory/digest.md` を生成し、manifest の `included / includedShas` に含める。判定の正本は `scripts/policy/public-tree-policy.js` の `CONTROL_ONLY_DIRS`。本 README・この節自体は説明文書のため public に残す。
 - **public tree の扱い**: `docs/agent-memory/` 配下の `.json` は任意深さで記憶レコードとみなし、`records/` 以外にあれば public tree 生成を fail-closed で中止する（denylist 規則。正本: [public-release-checklist.md §2](../security/public-release-checklist.md#2-public-repo-に出す--出さないファイル) と `scripts/policy/public-tree-policy.js` の `isAgentMemoryRecordPath`）。
-- **public repo での扱い**: `records/` が存在しないため `search` / `validate` / `digest` は常に 0 件（stderr の注意喚起で「public tree 相当」と分かる）。`add` / `revise` / `promote` 等の書込系コマンドは public repo では実行しない（`records/` を新規作成しても push 先は public repo であり、control repo の正本と分岐する）。記憶の検索・追加は `records/` を持つ control repo 側で行う。
+- **public repo での扱い**: 正本 `records/` は存在しないため `search` / `validate` / `digest` は正本レコードに対して 0 件になる。公開可能な記憶の参照は生成済み `docs/agent-memory/digest.md` をテキスト検索する。`add` / `revise` / `promote` 等の書込系コマンドは public repo では実行しない（正本は control repo のみ）。
 
 ```bash
 node scripts/agent-memory.js add --kind decision --title "..." --summary "..." --author claude --scope github-sync [--replaces <rejected-id>]
