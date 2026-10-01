@@ -21,7 +21,7 @@ function countSpan(page) {
   return page.getByTestId('find-count');
 }
 
-test.describe('検索・置換', () => {
+test.describe('検索・置換', { tag: ['@editor-critical'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });
