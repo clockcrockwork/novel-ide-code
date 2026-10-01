@@ -188,7 +188,11 @@ semgrep container image の digest を pull できない場合（tag が削除�
   - 外部 PR ブランチの checkout や任意コード実行をしない
   - Secrets を渡す job では外部 PR 由来のコードを実行しない
 
-### OpenSSF Scorecard（判断結果）
+### OpenSSF Scorecard（最終判断）
 
-- 現時点では**導入しない**。public repo 化と同時に導入を検討する（issue #275 で扱う）。
-- それまでは Dependabot（pinned actions/deps の更新検出）+ 本方針の手動運用で代替する。
+- **GitHub Action は導入しない**（2026-10-01、旧 #275 / #347 後続判断）。required check にもしない。
+- public `novel-ide-code` は OSS contribution / release の正本ではなく、private canonical の sanitized review surface。Scorecard の `Contributors` / `Code-Review` / `Dependency-Update-Tool` 等には、この役割上あえて満たさない条件がある（public 側 Dependabot update PR を生成しない等）。総合 score を改善目標にすると canonical / projection 境界を歪める。
+- relevant な supply-chain 保証は、SHA pin / 最小 `GITHUB_TOKEN` permissions / `pull_request_target` 不採用 / required ruleset / CodeQL / audit / Semgrep / secret scan など、既存の直接ゲートを正本とする。
+- Scorecard Action は別 workflow / runner 消費を増やし、SARIF upload では `security-events: write`、結果 publish では `id-token: write` を要求するため、観測だけの目的では追加権限・運用コストに見合わない。
+- OpenSSF の public-repository scan / viewer は必要時の**外部観測**として参照してよい。ただし score 自体を required gate や品質目標にはしない。
+- 将来 `novel-ide-code` の役割を「外部 contribution を受ける OSS canonical」または「release / package distribution の正本」へ変更した場合のみ再評価する。
