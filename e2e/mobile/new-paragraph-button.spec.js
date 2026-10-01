@@ -2,7 +2,7 @@ import { test, expect } from '../fixtures/app';
 
 const BUTTON_TITLE = '新しい段落を作成';
 
-test.describe('新規段落ボタン', () => {
+test.describe('新規段落ボタン', { tag: ['@editor-critical'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });
