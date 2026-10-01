@@ -4,7 +4,7 @@ async function clickModeButton(page, label) {
   await page.locator('.mgrp').getByRole('button', { name: label, exact: true }).click();
 }
 
-test.describe('モード切替でエディタ内容が保持される', () => {
+test.describe('モード切替でエディタ内容が保持される', { tag: ['@smoke'] }, () => {
   test.beforeEach(async ({ page, baseURL }) => {
     await page.goto(baseURL);
     await expect(page.locator('.tiptap.ProseMirror').first()).toBeVisible({ timeout: 15000 });
