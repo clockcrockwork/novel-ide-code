@@ -17,7 +17,7 @@ async function pasteIntoEditor(page, { html, plain }) {
   );
 }
 
-test.describe('クリップボード貼り付けセキュリティ', () => {
+test.describe('クリップボード貼り付けセキュリティ', { tag: ['@editor-critical'] }, () => {
   test('script タグ付き HTML を貼り付けてもスクリプトが実行されない', async ({ appPage: page }) => {
     await pasteIntoEditor(page, {
       html: '<p>test</p><script>window.__xss_paste=true</script>',
