@@ -1,7 +1,7 @@
 import { test, expect, DB_NAME, DB_VERSION } from '../fixtures/app';
 import { filesContainText } from '../helpers/idbFiles';
 
-test('入力内容がリロード後も保持される', async ({ appPage: page }) => {
+test('入力内容がリロード後も保持される', { tag: ['@editor-critical'] }, async ({ appPage: page }) => {
   const editor = page.locator('.tiptap.ProseMirror').first();
   await expect(editor).toBeVisible();
   await editor.click();
