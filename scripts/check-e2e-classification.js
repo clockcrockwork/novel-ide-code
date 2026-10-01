@@ -4,8 +4,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const MANIFEST_PATH = resolve(ROOT, 'e2e/classification.json');
-
 export const RUNTIME_TAGS = [
   '@smoke',
   '@editor-critical',
@@ -110,7 +108,7 @@ const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(res
 if (invokedAsScript) {
   try {
     const result = runCheck();
-    console.log(`E2E classification OK: ${result.specCount} specs`);
+    console.debug(`E2E classification OK: ${result.specCount} specs`);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
